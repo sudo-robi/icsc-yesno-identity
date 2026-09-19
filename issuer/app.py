@@ -212,7 +212,6 @@ if __name__ == "__main__":
     app.run(port=int(os.environ.get("PORT", 5001)), debug=False)
 
 
-# Vercel services route with the full path (/issuer/*); strip the prefix so the
-# same app serves at root on Render/offline AND under /issuer on Vercel.
-from werkzeug.middleware.dispatcher import DispatcherMiddleware as _DM  # noqa: E402
-vercel_app = _DM(app, {"/issuer": app})
+# Dual hosting: serve at root AND under /issuer (Vercel services subpath).
+from shared.wsgi import PrefixStrip as _PS  # noqa: E402
+app.wsgi_app = _PS(app.wsgi_app, ["/issuer"])

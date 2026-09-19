@@ -223,6 +223,6 @@ if __name__ == "__main__":
     app.run(port=int(os.environ.get("PORT", 5002)), debug=False)
 
 
-# Same dual-hosting shim as issuer: /verifier/* stripped; / and /holder/ pass through.
-from werkzeug.middleware.dispatcher import DispatcherMiddleware as _DM  # noqa: E402
-vercel_app = _DM(app, {"/verifier": app})
+# Dual hosting: serve at root AND under /verifier (Vercel services subpath).
+from shared.wsgi import PrefixStrip as _PS  # noqa: E402
+app.wsgi_app = _PS(app.wsgi_app, ["/verifier"])
