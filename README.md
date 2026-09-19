@@ -11,8 +11,9 @@ PORT=5001 python3 -m issuer.app & PORT=5002 python3 -m verifier.app &
 ```
 
 ## Free deploy (Render)
-Repo already has `render.yaml` (issuer + verifier web services, gunicorn).
-Push to GitHub → Render New → Blueprint → done.
+Repo has `render.blueprint.yaml` (issuer + verifier web services, gunicorn).
+Render deploy: New → Blueprint → set blueprint file to `render.blueprint.yaml`.
+Live demo also on Vercel (single serverless function, ephemeral storage).
 
 ## Demo (5 min)
 1. Issue U001 → paste into verifier → YES

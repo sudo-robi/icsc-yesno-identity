@@ -7,3 +7,4 @@ verifier/receipts.db
 verifier/trustbundle.json
 .pytest_cache/
 .coverage
+.vercel
