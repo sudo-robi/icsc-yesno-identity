@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.venv/
+keys/*.hex
+issuer/issuer.db
+verifier/receipts.db
+verifier/trustbundle.json
+.pytest_cache/
+.coverage

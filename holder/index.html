@@ -1,0 +1,41 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Holder — Yes/No ID</title>
+<style>body{font-family:system-ui;max-width:480px;margin:2rem auto;padding:0 1rem;text-align:center}
+#qr{font-size:.7rem;word-break:break-all;background:#f4f4f4;padding:1rem}#code{font-size:3rem;letter-spacing:.3rem}</style></head>
+<body>
+<!-- agency: mobile-app-builder. Same page is wrapped in Android WebView for native demo. -->
+<h1>My ID — shows YES/NO only</h1>
+<label>Issuer <input id="iss" value="http://localhost:5001"></label><br>
+<label>User <select id="uid"><option>U001</option><option>U002</option><option>U003</option></select></label>
+<label>Shop <select id="shop"><option>SHOP-A</option><option>SHOP-B</option></select></label><br><br>
+<button onclick="fetch_cred()">Get fresh credential (5-min)</button>
+<button onclick="answer_challenge()">Answer verifier challenge (anti-replay)</button>
+<div id="qr">—</div>
+<div>Fallback code: <span id="code">—</span></div>
+<div>Expires in <span id="ttl">—</span></div>
+<script>
+let cred=null,exp=0;
+async function fetch_cred(){
+  const iss=document.getElementById('iss').value;
+  const r=await fetch(iss+'/issue',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({user_id:document.getElementById('uid').value,verifier_id:document.getElementById('shop').value})});
+  cred=await r.json();exp=cred.exp||0;
+  document.getElementById('qr').textContent=JSON.stringify(cred);
+  tick();
+}
+function tick(){
+  const s=Math.max(0,exp-Math.floor(Date.now()/1000));
+  document.getElementById('ttl').textContent=s+'s';
+  if(s>0)setTimeout(tick,1000);
+}
+async function answer_challenge(){
+  const nonce=prompt('Paste verifier nonce:');if(!nonce)return;
+  const iss=document.getElementById('iss').value;
+  const r=await fetch(iss+'/issue',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({user_id:document.getElementById('uid').value,verifier_id:document.getElementById('shop').value,nonce})});
+  cred=await r.json();exp=cred.exp||0;
+  document.getElementById('qr').textContent=JSON.stringify(cred);
+  tick();
+}
+</script>
+</body></html>

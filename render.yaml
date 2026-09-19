@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: icsc-issuer
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn issuer.app:app --bind 0.0.0.0:$PORT
+    envVars:
+      - key: ISSUER_ID
+        value: NIMC-TEST-01
+  - type: web
+    name: icsc-verifier
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn verifier.app:app --bind 0.0.0.0:$PORT
+    envVars:
+      - key: VERIFIER_ID
+        value: SHOP-A

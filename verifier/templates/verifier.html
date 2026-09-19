@@ -1,0 +1,27 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Verify — {{ verifier }}</title>
+<style>body{font-family:system-ui;max-width:640px;margin:2rem auto;padding:0 1rem;text-align:center}
+#res{font-size:4rem;font-weight:900;padding:2rem;border-radius:1rem;margin:1rem 0}
+.yes{background:#0a7d2c;color:#fff}.no{background:#b00020;color:#fff}
+textarea{width:100%;height:90px}button{font-size:1.1rem;padding:.6rem 1.2rem}</style></head>
+<body>
+<h1>Shop check — {{ verifier }}</h1>
+{% if not has_trust %}<p style="color:red">No trustbundle. Pair with issuer once via /sync.</p>{% endif %}
+<p>Challenge nonce: <code id="nonce">…</code> <button onclick="fresh()">↻</button></p>
+<textarea id="cred" placeholder='Paste credential JSON or scan QR'></textarea><br><br>
+<button onclick="verify()">VERIFY (offline)</button>
+<div id="res">—</div>
+<pre id="log" style="text-align:left"></pre>
+<script>
+async function fresh(){const r=await fetch('/challenge');const j=await r.json();document.getElementById('nonce').textContent=j.nonce;}
+async function verify(){
+  const r=await fetch('/verify',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({cred:JSON.parse(document.getElementById('cred').value),nonce:document.getElementById('nonce').textContent})});
+  const j=await r.json();const d=document.getElementById('res');
+  d.textContent=j.result;d.className=j.result==='YES'?'yes':'no';
+  document.getElementById('log').textContent=JSON.stringify(j,null,2);
+}
+fresh();
+</script>
+<p><a href="/receipts">receipts</a> · <a href="/receipts.csv">CSV</a> · <a href="/healthz">health</a></p>
+</body></html>
