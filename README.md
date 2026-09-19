@@ -2,6 +2,15 @@
 
 Proving `over_18?` without revealing the record. Synthetic data only.
 
+## Live
+- GitHub: https://github.com/sudo-robi/icsc-yesno-identity
+- Vercel: https://icsc-yesno-identity-rho.vercel.app
+  - Issuer: `/issuer/` · Verifier: `/verifier/` · Holder: `/holder/`
+  - Pair once: `GET /issuer/pubkey` → `POST /verifier/sync` (honest pairing ceremony)
+  - Live smoke: `.venv/bin/python scripts/live_demo.py` (YES + NO + BADSIG + REPLAY)
+- Vercel limits (honest): ephemeral `/tmp` per service — keys/receipts reset on
+  cold starts, re-pair takes 10s. Real deployments use Render (`deploy/render.blueprint.yaml`).
+
 ## Run offline (judges, no internet)
 ```bash
 pip install -r requirements.txt
