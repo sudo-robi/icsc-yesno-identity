@@ -206,6 +206,9 @@ def index():
                            iss=ISSUER_ID, rev=rl)
 
 
+init_db()  # import-safe (CREATE TABLE IF NOT EXISTS): needed for gunicorn/Vercel
+
+
 if __name__ == "__main__":
     init_db()
     load_keys()

@@ -211,6 +211,9 @@ def index():
                            has_trust=bool(trust()))
 
 
+init_db()  # import-safe (CREATE TABLE IF NOT EXISTS): needed for gunicorn/Vercel
+
+
 @app.get("/holder/")
 def holder_page():
     from flask import send_from_directory
