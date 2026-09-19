@@ -21,8 +21,8 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(mess
 log = logging.getLogger("verifier")
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-DB = os.path.join(BASE, "receipts.db")
-TRUST = os.path.join(BASE, "trustbundle.json")
+DB = os.environ.get("VERIFIER_DB", os.path.join(BASE, "receipts.db"))
+TRUST = os.environ.get("TRUSTBUNDLE_PATH", os.path.join(BASE, "trustbundle.json"))
 VERIFIER_ID = os.environ.get("VERIFIER_ID", "SHOP-A")
 
 app = Flask(__name__)

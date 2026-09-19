@@ -20,8 +20,8 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(mess
 log = logging.getLogger("issuer")
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-DB = os.path.join(BASE, "issuer.db")
-KEYDIR = os.path.join(os.path.dirname(BASE), "keys")
+DB = os.environ.get("ISSUER_DB", os.path.join(BASE, "issuer.db"))
+KEYDIR = os.environ.get("ISSUER_KEYDIR", os.path.join(os.path.dirname(BASE), "keys"))
 ISSUER_ID = os.environ.get("ISSUER_ID", "NIMC-TEST-01")
 
 app = Flask(__name__)
