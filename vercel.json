@@ -1,33 +1,13 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "rewrites": [
-    {
-      "source": "/(.*)",
-      "destination": "/api/index"
-    },
-    {
-      "source": "/api/icsc-verifier(/.*)?",
-      "destination": {
-        "type": "service",
-        "service": "icsc-verifier"
-      }
-    },
-    {
-      "source": "/api/icsc-issuer(/.*)?",
-      "destination": {
-        "type": "service",
-        "service": "icsc-issuer"
-      }
-    }
-  ],
   "services": {
-    "icsc-issuer": {
-      "root": ".",
-      "buildCommand": "pip install -r requirements.txt"
-    },
-    "icsc-verifier": {
-      "root": ".",
-      "buildCommand": "pip install -r requirements.txt"
-    }
-  }
+    "icsc-issuer": { "root": ".", "entrypoint": "issuer/app.py" },
+    "icsc-verifier": { "root": ".", "entrypoint": "verifier/app.py" }
+  },
+  "rewrites": [
+    { "source": "/issuer/:path*", "destination": { "service": "icsc-issuer" } },
+    { "source": "/verifier/:path*", "destination": { "service": "icsc-verifier" } },
+    { "source": "/holder/:path*", "destination": { "service": "icsc-verifier" } },
+    { "source": "/(.*)", "destination": { "service": "icsc-verifier" } }
+  ]
 }

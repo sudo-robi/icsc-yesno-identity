@@ -21,8 +21,11 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(mess
 log = logging.getLogger("verifier")
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-DB = os.environ.get("VERIFIER_DB", os.path.join(BASE, "receipts.db"))
-TRUST = os.environ.get("TRUSTBUNDLE_PATH", os.path.join(BASE, "trustbundle.json"))
+_ON_VERCEL = os.environ.get("VERCEL") == "1"
+DB = os.environ.get("VERIFIER_DB",
+     "/tmp/receipts.db" if _ON_VERCEL else os.path.join(BASE, "receipts.db"))
+TRUST = os.environ.get("TRUSTBUNDLE_PATH",
+        "/tmp/trustbundle.json" if _ON_VERCEL else os.path.join(BASE, "trustbundle.json"))
 VERIFIER_ID = os.environ.get("VERIFIER_ID", "SHOP-A")
 
 app = Flask(__name__)
@@ -206,6 +209,13 @@ def sync():
 def index():
     return render_template("verifier.html", verifier=VERIFIER_ID,
                            has_trust=bool(trust()))
+
+
+@app.get("/holder/")
+def holder_page():
+    from flask import send_from_directory
+    holder_dir = os.path.join(os.path.dirname(BASE), "holder")
+    return send_from_directory(holder_dir, "index.html")
 
 
 if __name__ == "__main__":
