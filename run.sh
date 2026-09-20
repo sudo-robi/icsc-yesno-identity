@@ -4,9 +4,11 @@
 # REAL signed bundle (same /bundle -> /sync flow as production, done via files).
 set -e
 cd "$(dirname "$0")"
-python3 -c "import issuer.app as a; a.init_db(); a.load_keys()"
-python3 -c "import verifier.app as a; a.init_db()"
-python3 -c "
+PY=python3
+[ -x .venv/bin/python ] && PY=.venv/bin/python
+$PY -c "import issuer.app as a; a.init_db(); a.load_keys()"
+$PY -c "import verifier.app as a; a.init_db()"
+$PY -c "
 import json, issuer.app as i
 priv, pub = i.load_keys()
 bundle = i.build_bundle('SHOP-A', priv, pub)

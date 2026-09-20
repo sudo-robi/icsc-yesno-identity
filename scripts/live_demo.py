@@ -29,11 +29,10 @@ def verifier_call(method, path, body=None):
     return call(VERIFIER, VPFX, method, path, body)
 
 
-print("--- pairing")
-pub = issuer_call("GET", "/healthz") and issuer_call("GET", "/pubkey")
-print("pubkey:", pub["pubkey_hex"][:16], "...")
-print(verifier_call("POST", "/sync", {"pubkey_hex": pub["pubkey_hex"],
-      "v": pub["v"], "revoked_uids": [], "otp_secrets": {}}))
+print("--- pairing (signed bundle -> sync)")
+bundle = issuer_call("GET", "/bundle?verifier_id=SHOP-A")
+print("bundle v%s, revoked=%s minors=%s" % (bundle["v"], bundle["revoked"], bundle["minors"]))
+print(verifier_call("POST", "/sync", bundle))
 
 print("--- adult YES")
 cred = issuer_call("POST", "/issue", {"user_id": "U001", "verifier_id": "SHOP-A"})
