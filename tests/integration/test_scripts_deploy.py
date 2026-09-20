@@ -150,7 +150,7 @@ def test_run_sh_boots_and_pairs(tmp_path):
 
 
 def test_render_blueprint_has_disk_and_env():
-    text = open(os.path.join(REPO, "deploy", "render.blueprint.yaml")).read()
+    text = open(os.path.join(REPO, "render.yaml")).read()
     for needle in ("mountPath: /data", "sizeGB:", "ADMIN_TOKEN", "--workers 1",
                    "ISSUER_DB", "VERIFIER_DB", "OTP_SECRETS_PATH", "BEHIND_PROXY"):
         assert needle in text, needle
