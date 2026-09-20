@@ -14,9 +14,11 @@ from flask_limiter.util import get_remote_address
 from marshmallow import Schema, fields, ValidationError
 
 from shared.crypto import (
-    CLOCK_SKEW_SEC, otp6, receipt_hash, sha256_hex, verify_sig,
+    CLOCK_SKEW_SEC, otp6, sha256_hex, verify_sig,
 )
-from shared.schemas import CRED_MAX_BYTES, malformed, unsigned_body
+from shared.schemas import (
+    CRED_MAX_BYTES, REASONS, TRUSTBUNDLE_REQUIRED_FIELDS, malformed, unsigned_body,
+)
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 log = logging.getLogger("verifier")
@@ -36,6 +38,39 @@ NONCE_TTL_SEC = 300
 
 SECRETS_PATH = os.environ.get("OTP_SECRETS_PATH",
                "/tmp/otp_secrets.json" if _ON_VERCEL else os.path.join(BASE, "otp_secrets.json"))
+
+KEYS_DIR = os.environ.get("RECEIPT_KEY_DIR",
+             os.path.join(os.path.dirname(BASE), "keys"))
+
+
+def _receipt_key() -> str:
+    """HMAC key for the receipt chain, persisted so restarts stay verifiable.
+    Anyone with DB *and* key access can still rewrite history — the chain
+    proves tampering to key-less auditors, nothing more (see README limits)."""
+    if _ON_VERCEL:
+        return os.environ.get("RECEIPT_HMAC_KEY", "vercel-demo-key")
+    import secrets as _s
+    os.makedirs(KEYS_DIR, exist_ok=True)
+    kf = os.path.join(KEYS_DIR, "receipt_hmac.key")
+    if os.path.exists(kf):
+        with open(kf) as f:
+            return f.read().strip()
+    key = _s.token_hex(32)
+    with open(kf, "w") as f:
+        f.write(key)
+    try:
+        os.chmod(kf, 0o600)
+    except OSError:
+        pass
+    return key
+
+
+def _chain_hash(prev_hash: str, ts: int, verifier_id: str, q: str,
+                result: str, nonce_hash: str, sig_hash: str) -> str:
+    import hmac as _hm
+    import hashlib as _hl
+    raw = f"{prev_hash}|{ts}|{verifier_id}|{q}|{result}|{nonce_hash}|{sig_hash}"
+    return _hm.new(_receipt_key().encode(), raw.encode(), _hl.sha256).hexdigest()
 
 
 class VerifySchema(Schema):
@@ -67,18 +102,32 @@ def trust():
 
 
 def log_receipt(q, result, nonce, sig):
+    if result not in ("YES", "NO"):
+        raise ValueError(f"unknown result: {result!r}")
     c = db()
-    prev = c.execute("SELECT entry_hash FROM receipts ORDER BY id DESC LIMIT 1").fetchone()
-    prev_h = prev["entry_hash"] if prev else "GENESIS"
-    ts = int(time.time())
-    nh = sha256_hex(nonce or "-")
-    sh = sha256_hex(json.dumps(sig, sort_keys=True) if isinstance(sig, dict) else str(sig))
-    eh = receipt_hash(prev_h, ts, VERIFIER_ID, q, result, nh, sh)
-    c.execute("INSERT INTO receipts (ts,verifier_id,q,result,nonce_hash,sig_hash,prev_hash,entry_hash)"
-              " VALUES (?,?,?,?,?,?,?,?)",
-              (ts, VERIFIER_ID, q, result, nh, sh, prev_h, eh))
-    c.commit()
-    c.close()
+    # IMMEDIATE: serialize read-then-insert so concurrent requests can't fork the chain.
+    c.isolation_level = None
+    c.execute("BEGIN IMMEDIATE")
+    try:
+        prev = c.execute("SELECT entry_hash FROM receipts ORDER BY id DESC LIMIT 1").fetchone()
+        prev_h = prev["entry_hash"] if prev else "GENESIS"
+        ts = int(time.time())
+        # Peppered hashes: a bare 6-digit OTP (or nonce) must not be brute-forceable
+        # by readers of the public /receipts endpoint.
+        pepper = _receipt_key()
+        nh = sha256_hex(pepper + (nonce or "-"))
+        sh = sha256_hex(pepper + (json.dumps(sig, sort_keys=True)
+                                  if isinstance(sig, dict) else str(sig)))
+        eh = _chain_hash(prev_h, ts, VERIFIER_ID, q, result, nh, sh)
+        c.execute("INSERT INTO receipts (ts,verifier_id,q,result,nonce_hash,sig_hash,prev_hash,entry_hash)"
+                  " VALUES (?,?,?,?,?,?,?,?)",
+                  (ts, VERIFIER_ID, q, result, nh, sh, prev_h, eh))
+        c.execute("COMMIT")
+    except Exception:
+        c.execute("ROLLBACK")
+        raise
+    finally:
+        c.close()
     return eh
 
 
@@ -100,7 +149,9 @@ def _load_secrets() -> dict:
 
 def decide(cred: dict, nonce: str) -> tuple[str, str]:
     """Order: trust -> shape -> size -> expiry -> challenge -> sig ->
-    revocation -> attribute. Returns (YES/NO, reason)."""
+    revocation -> attribute. Single-use challenges: a registered nonce is
+    consumed once its binding passes, so an intercepted live credential
+    cannot be replayed inside the window. Returns (YES/NO, reason)."""
     t = trust()
     if not t:
         return "NO", "NO_TRUSTBUNDLE"
@@ -108,6 +159,8 @@ def decide(cred: dict, nonce: str) -> tuple[str, str]:
         return "NO", "MALFORMED"
     if len(json.dumps(cred)) > CRED_MAX_BYTES:
         return "NO", "TOO_LARGE"
+    if not isinstance(cred["exp"], (int, float)):
+        return "NO", "MALFORMED"
     if cred["exp"] + CLOCK_SKEW_SEC < time.time():
         return "NO", "EXPIRED"
     # live-challenge binding: nonce must be one THIS verifier issued (and fresh),
@@ -119,15 +172,17 @@ def decide(cred: dict, nonce: str) -> tuple[str, str]:
             return "NO", "UNKNOWN_CHALLENGE"
         if cred.get("n") != nonce:
             return "NO", "REPLAY"
+        del _nonces[nonce]  # consume: one challenge, one attempt
     body = unsigned_body(cred)
     if not verify_sig(body, cred["s"], t["pubkey_hex"]):
         return "NO", "BADSIG"
-    # revocation: cached list version
-    rev = t.get("revoked_uids", [])
-    # uid_p is a pseudonym so revocation maps via issuer-side list of uid_p per verifier;
-    # for demo: issuer also publishes revoked pseudonyms for this verifier in trustbundle.
-    if cred["uid_p"] in rev:
+    # Status lists from the signed bundle (per-verifier pseudonyms — no PII).
+    # Revocation/minor status applies immediately after a sync, independent of
+    # the signed r-flag inside older credentials.
+    if cred["uid_p"] in (t.get("revoked") or []):
         return "NO", "REVOKED"
+    if cred["uid_p"] in (t.get("minors") or []):
+        return "NO", "NOT_ADULT"
     if cred.get("a") == "over_18" and cred.get("r") == 1:
         return "YES", "OK"
     return "NO", "NOT_ADULT"
@@ -155,13 +210,19 @@ def verify():
     except ValidationError as e:
         return {"result": "NO", "reason": "MALFORMED", "detail": str(e)}, 400
     cred, nonce = args["cred"], args.get("nonce", "")
+    if not isinstance(cred, dict):
+        return {"result": "NO", "reason": "MALFORMED"}, 400
     # replay: static QR reused with a *different* fresh nonce fails unless holder re-signed
     result, reason = decide(cred, nonce)
-    eh = log_receipt("over_18", result, nonce or str(cred.get("n")),
+    if reason not in REASONS:  # internal contract drift, never caller input
+        log.error(json.dumps({"event": "reason_drift", "reason": reason}))
+        return {"result": "NO", "reason": "MALFORMED"}, 500
+    mode = "challenge" if nonce else "static"
+    eh = log_receipt(f"over_18:{mode}", result, nonce or str(cred.get("n")),
                      cred.get("s"))
     log.info(json.dumps({"event": "verify", "result": result,
                          "reason": reason, "receipt": eh}))
-    return jsonify({"result": result, "reason": reason, "receipt": eh})
+    return jsonify({"result": result, "reason": reason, "mode": mode, "receipt": eh})
 
 
 @app.post("/verify_code")
@@ -170,26 +231,39 @@ def verify_code():
     """Feature-phone path: 6-digit single-use code. Demo OTP secrets live in the
     SEPARATE secrets store (never in the trustbundle). Codes expire per 30s step."""
     data = request.get_json(force=True)
+    if not isinstance(data, dict):
+        return {"result": "NO", "reason": "MALFORMED"}, 400
     code = str(data.get("code", ""))
-    # demo check: code must match one of the known secrets for current/prev step
+    # demo check: code must match one of the known secrets for current/prev step.
+    # The match also identifies the holder pseudonym, so status (revoked/minor)
+    # from the signed bundle is enforced — a bare valid code is never enough.
     import time as _t
     step = int(_t.time() // 30)
-    ok = False
-    for sec in _load_secrets().values():
+    matched_uid = None
+    for uid_p, sec in _load_secrets().items():
         if code in (otp6(sec, VERIFIER_ID, step), otp6(sec, VERIFIER_ID, step - 1)):
-            ok = True
+            matched_uid = uid_p
             break
     c = db()
     if c.execute("SELECT 1 FROM used_codes WHERE code=?", (code,)).fetchone():
         c.close()
-        log_receipt("over_18", "NO", code, "otp-reuse")
+        log_receipt("over_18:otp", "NO", code, "otp-reuse")
         return {"result": "NO", "reason": "REPLAY"}
     c.execute("INSERT OR IGNORE INTO used_codes VALUES (?,?)", (code, int(_t.time())))
     c.commit()
     c.close()
-    result = "YES" if ok else "NO"
-    eh = log_receipt("over_18", result, code, "otp")
-    return {"result": result, "reason": "OK_OTP" if ok else "BAD_OTP", "receipt": eh}
+    if matched_uid is None:
+        result, reason = "NO", "BAD_OTP"
+    else:
+        t = trust() or {}
+        if matched_uid in (t.get("revoked") or []):
+            result, reason = "NO", "REVOKED"
+        elif matched_uid in (t.get("minors") or []):
+            result, reason = "NO", "NOT_ADULT"
+        else:
+            result, reason = "YES", "OK_OTP"
+    eh = log_receipt("over_18:otp", result, code, "otp")
+    return {"result": result, "reason": reason, "receipt": eh}
 
 
 @app.get("/receipts")
@@ -214,14 +288,19 @@ def receipts_csv():
 
 @app.post("/sync")
 def sync():
-    """One-time pairing (USB/QR): cache issuer pubkey + revocation pseudonyms.
+    """One-time pairing (USB/QR): cache the issuer's SIGNED trust bundle.
     Public material goes to the trustbundle; any bundled demo OTP secrets are
     split out into the separate secrets store.
     Auth: if PAIRING_TOKEN env is set, the caller must present it (body field
     `pairing_token` or `X-Pairing-Token` header), else 403 — otherwise anyone
     reaching the verifier could swap its trusted keys. Unset = open pairing
-    for local demos (logged as a warning)."""
+    for local demos (logged as a warning).
+    Trust: first sync is TOFU (pins the key, logged). Later syncs must carry a
+    signature from the pinned key AND a version >= the pinned one, else 409 —
+    this kills rollback/swap attacks."""
     data = request.get_json(force=True)
+    if not isinstance(data, dict):
+        return {"result": "NO", "reason": "MALFORMED"}, 400
     required = os.environ.get("PAIRING_TOKEN")
     if required:
         presented = data.get("pairing_token") or request.headers.get("X-Pairing-Token")
@@ -232,7 +311,35 @@ def sync():
         log.warning(json.dumps({"event": "sync_open_mode",
                                 "note": "set PAIRING_TOKEN to lock pairing"}))
     tb = dict(data)
-    assert "pubkey_hex" in tb and len(tb["pubkey_hex"]) == 64
+    if not TRUSTBUNDLE_REQUIRED_FIELDS.issubset(tb.keys()):
+        return {"result": "NO", "reason": "MALFORMED",
+                "detail": f"needs {sorted(TRUSTBUNDLE_REQUIRED_FIELDS)}"}, 400
+    if not isinstance(tb["pubkey_hex"], str) or len(tb["pubkey_hex"]) != 64:
+        return {"result": "NO", "reason": "MALFORMED"}, 400
+    if not isinstance(tb["v"], int):
+        return {"result": "NO", "reason": "MALFORMED"}, 400
+    for lst in ("revoked", "minors"):
+        if lst in tb and not isinstance(tb[lst], list):
+            return {"result": "NO", "reason": "MALFORMED"}, 400
+    pinned = trust()
+    sig = tb.pop("s", None)
+    # The signature covers issuer material only — operator-supplied extras
+    # (pairing token, locally provisioned OTP secrets) are excluded so they
+    # can ride along without breaking the issuer signature.
+    sig_body = {k: v for k, v in tb.items()
+                if k not in ("pairing_token", "otp_secrets")}
+    if pinned and pinned.get("pubkey_hex"):
+        if not sig or not verify_sig(sig_body, sig, pinned["pubkey_hex"]):
+            log.warning(json.dumps({"event": "sync_bad_signature"}))
+            return {"result": "NO", "reason": "BADSIG"}, 409
+        if tb["v"] < pinned.get("v", 0):
+            log.warning(json.dumps({"event": "sync_rollback",
+                                    "got": tb["v"], "pinned": pinned.get("v")}))
+            return {"result": "NO", "reason": "ROLLBACK"}, 409
+    else:
+        log.warning(json.dumps({"event": "sync_tofu", "iss": tb.get("iss")}))
+    if sig is not None:
+        tb["s"] = sig
     secrets = tb.pop("otp_secrets", None)
     tb.pop("pairing_token", None)
     with open(TRUST, "w") as f:
@@ -252,6 +359,15 @@ def index():
 init_db()  # import-safe (CREATE TABLE IF NOT EXISTS): needed for gunicorn/Vercel
 
 
+# Dual hosting: serve at root AND under /verifier (Vercel services subpath).
+# Assigned here (not after the __main__ guard) so local runs match deploys.
+from shared.wsgi import PrefixStrip as _PS  # noqa: E402
+app.wsgi_app = _PS(app.wsgi_app, ["/verifier"])
+if os.environ.get("BEHIND_PROXY") == "1":  # Render/Vercel terminate TLS at the edge
+    from werkzeug.middleware.proxy_fix import ProxyFix as _PF  # noqa: E402
+    app.wsgi_app = _PF(app.wsgi_app, x_for=1, x_proto=1)
+
+
 @app.get("/holder/")
 def holder_page():
     from flask import send_from_directory
@@ -259,11 +375,6 @@ def holder_page():
     return send_from_directory(holder_dir, "index.html")
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover - dev entrypoint
     init_db()
     app.run(port=int(os.environ.get("PORT", 5002)), debug=False)
-
-
-# Dual hosting: serve at root AND under /verifier (Vercel services subpath).
-from shared.wsgi import PrefixStrip as _PS  # noqa: E402
-app.wsgi_app = _PS(app.wsgi_app, ["/verifier"])

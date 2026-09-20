@@ -4,8 +4,10 @@ Production: Flask + Flask-Limiter, env config, structured logs, parameterized SQ
 import json
 import logging
 import os
+import secrets as _rand
 import sqlite3
 import time
+from datetime import date
 
 from flask import Flask, jsonify, render_template, request
 from flask_limiter import Limiter
@@ -13,7 +15,7 @@ from flask_limiter.util import get_remote_address
 from marshmallow import Schema, fields, ValidationError
 
 from shared.crypto import (
-    EXPIRY_SEC, gen_keypair, pseudonym, sign_cred,
+    EXPIRY_SEC, gen_keypair, otp6, pseudonym, sign_cred,
 )
 from shared.schemas import CRED_REQUIRED_FIELDS, unsigned_body
 
@@ -27,6 +29,38 @@ DB = os.environ.get("ISSUER_DB",
 KEYDIR = os.environ.get("ISSUER_KEYDIR",
          "/tmp/keys" if _ON_VERCEL else os.path.join(os.path.dirname(BASE), "keys"))
 ISSUER_ID = os.environ.get("ISSUER_ID", "NIMC-TEST-01")
+
+ADMIN_TOKEN = os.environ.get("ISSUER_ADMIN_TOKEN")
+if not ADMIN_TOKEN:
+    ADMIN_TOKEN = _rand.token_hex(16)
+    log.warning(json.dumps({"event": "admin_token_generated",
+                            "note": "set ISSUER_ADMIN_TOKEN to pin it",
+                            "token": ADMIN_TOKEN}))
+
+
+def require_admin():
+    """Operator auth for /revoke + /rotate. Returns None if OK, else (body, 403).
+    Env ISSUER_ADMIN_TOKEN overrides the generated default at request time
+    (so tests and redeploys can pin it without reimporting)."""
+    required = os.environ.get("ISSUER_ADMIN_TOKEN", ADMIN_TOKEN)
+    presented = request.headers.get("X-Admin-Token") or \
+        ((request.get_json(silent=True) or {}) if request.is_json else {}).get("admin_token")
+    if presented != required:
+        log.warning(json.dumps({"event": "admin_rejected",
+                                "path": request.path}))
+        return {"error": "bad admin token"}, 403
+    return None
+
+
+def is_adult(dob_str: str, today: date | None = None) -> bool:
+    """Calendar-correct 18+ check (leap-day safe). `18*365` day counts are off by days."""
+    y, m, d = map(int, dob_str.split("-"))
+    today = today or date.today()
+    try:
+        milestone = date(y + 18, m, d)
+    except ValueError:  # Feb 29 -> Feb 28 on non-leap years
+        milestone = date(y + 18, m, 28)
+    return milestone <= today
 
 app = Flask(__name__)
 limiter = Limiter(get_remote_address, app=app, default_limits=["200/hour"])
@@ -105,6 +139,28 @@ def current_revlist(priv_hex):
     return body
 
 
+def build_bundle(verifier_id: str, priv_hex: str, pub_hex: str) -> dict:
+    """Signed trust bundle for one verifier: per-verifier pseudonyms of revoked
+    users and minors, so the verifier can enforce status without ever seeing
+    names or DOBs. v is monotonic — verifiers reject rollbacks."""
+    c = db()
+    row = c.execute("SELECT * FROM revlist ORDER BY v DESC LIMIT 1").fetchone()
+    users = c.execute("SELECT id, dob, revoked, master_secret FROM users").fetchall()
+    c.close()
+    revoked, minors = [], []
+    for u in users:
+        pseudo = pseudonym(u["master_secret"], verifier_id)
+        if u["revoked"]:
+            revoked.append(pseudo)
+        elif not is_adult(u["dob"]):
+            minors.append(pseudo)
+    body = {"iss": ISSUER_ID, "pubkey_hex": pub_hex, "v": row["v"],
+            "verifier": verifier_id, "revoked": sorted(revoked),
+            "minors": sorted(minors)}
+    body["s"] = sign_cred(body, priv_hex)
+    return body
+
+
 @app.get("/healthz")
 def healthz():
     return {"ok": True, "iss": ISSUER_ID}
@@ -119,8 +175,19 @@ def pubkey():
     return {"iss": ISSUER_ID, "pubkey_hex": pub, "v": v}
 
 
+@app.get("/bundle")
+def bundle():
+    """Signed per-verifier trust bundle (the documented revocation channel)."""
+    verifier_id = request.args.get("verifier_id", "SHOP-A")
+    if len(verifier_id) > 32:
+        return {"error": "verifier_id too long"}, 400
+    priv, pub = load_keys()
+    return jsonify(build_bundle(verifier_id, priv, pub))
+
+
 @app.get("/revlist")
 def revlist():
+    """Raw revocation log (user IDs — issuer-internal transparency, not the channel)."""
     priv, _ = load_keys()
     return jsonify(current_revlist(priv))
 
@@ -139,10 +206,8 @@ def issue():
         return {"error": "unknown user"}, 404
     if u["revoked"]:
         return {"error": "revoked"}, 403
-    # over-18 from DOB
-    from datetime import date
-    y, m, d = map(int, u["dob"].split("-"))
-    adult = (date.today() - date(y, m, d)).days >= 18 * 365
+    # over-18 from DOB (calendar-correct; day counts drift on leap years)
+    adult = is_adult(u["dob"])
     priv, _ = load_keys()
     payload = {"v": 1, "iss": ISSUER_ID,
                "uid_p": pseudonym(u["master_secret"], args["verifier_id"]),
@@ -152,18 +217,45 @@ def issue():
     # issuer embeds + signs it. Static QRs (no n) fail a fresh challenge -> anti-replay.
     if args.get("nonce"):
         payload["n"] = args["nonce"]
-    # Contract check: the unsigned body must be exactly the required fields minus "s".
-    # This is what the verifier re-derives via shared.schemas.unsigned_body().
-    assert set(unsigned_body(payload)) == set(CRED_REQUIRED_FIELDS) - {"s"}, \
-        f"contract drift: {sorted(payload)}"
+    # Contract check (explicit 500, never bare assert): the unsigned body must be
+    # exactly the required fields minus "s", with optional "n".
+    want = set(CRED_REQUIRED_FIELDS) - {"s"}
+    if args.get("nonce"):
+        want |= {"n"}
+    if set(unsigned_body(payload)) != want:
+        log.error(json.dumps({"event": "contract_drift",
+                              "keys": sorted(payload)}))
+        return {"error": "issuer contract drift"}, 500
     payload["s"] = sign_cred(unsigned_body(payload), priv)
     log.info(json.dumps({"event": "issue", "uid_p": payload["uid_p"],
                          "r": payload["r"]}))
     return jsonify(payload)
 
 
+@app.get("/otp")
+@limiter.limit("30/minute")
+def otp():
+    """Holder fallback-code source (feature phones): current 6-digit code for a
+    user at a verifier. Open like /issue — enrollment identity proofing is an
+    explicit prototype boundary (see README limits)."""
+    user_id = request.args.get("user_id", "")
+    verifier_id = request.args.get("verifier_id", "SHOP-A")
+    if not (1 <= len(user_id) <= 32 and len(verifier_id) <= 32):
+        return {"error": "bad user_id/verifier_id"}, 400
+    c = db()
+    u = c.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+    c.close()
+    if not u:
+        return {"error": "unknown user"}, 404
+    return {"code": otp6(u["master_secret"], verifier_id), "verifier": verifier_id,
+            "step_sec": 30}
+
+
 @app.post("/revoke")
 def revoke():
+    denied = require_admin()
+    if denied:
+        return denied
     try:
         args = RevokeSchema().load(request.get_json(force=True))
     except ValidationError as e:
@@ -183,6 +275,12 @@ def revoke():
 @app.post("/rotate")
 def rotate():
     """Issuer-compromise recovery: fast key rotation, bumps trustbundle version."""
+    denied = require_admin()
+    if denied:
+        return denied
+    if os.environ.get("ISSUER_PRIV_HEX"):
+        # Refuse rather than lie: rotation would advertise a key that never signs.
+        return {"error": "key is env-managed; rotate ISSUER_PRIV_HEX instead"}, 409
     priv_new, pub_new = gen_keypair()
     os.makedirs(KEYDIR, exist_ok=True)
     with open(os.path.join(KEYDIR, "issuer_priv.hex"), "w") as f:
@@ -214,12 +312,16 @@ def index():
 init_db()  # import-safe (CREATE TABLE IF NOT EXISTS): needed for gunicorn/Vercel
 
 
-if __name__ == "__main__":
+# Dual hosting: serve at root AND under /issuer (Vercel services subpath).
+# Assigned here (not after the __main__ guard) so `python -m issuer.app` matches deploys.
+from shared.wsgi import PrefixStrip as _PS  # noqa: E402
+app.wsgi_app = _PS(app.wsgi_app, ["/issuer"])
+if os.environ.get("BEHIND_PROXY") == "1":  # Render/Vercel terminate TLS at the edge
+    from werkzeug.middleware.proxy_fix import ProxyFix as _PF  # noqa: E402
+    app.wsgi_app = _PF(app.wsgi_app, x_for=1, x_proto=1)
+
+
+if __name__ == "__main__":  # pragma: no cover - dev entrypoint
     init_db()
     load_keys()
     app.run(port=int(os.environ.get("PORT", 5001)), debug=False)
-
-
-# Dual hosting: serve at root AND under /issuer (Vercel services subpath).
-from shared.wsgi import PrefixStrip as _PS  # noqa: E402
-app.wsgi_app = _PS(app.wsgi_app, ["/issuer"])

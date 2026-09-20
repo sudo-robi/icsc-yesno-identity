@@ -10,6 +10,7 @@
 <label>Shop <select id="shop"><option>SHOP-A</option><option>SHOP-B</option></select></label><br><br>
 <button onclick="fetch_cred()">Get fresh credential (5-min)</button>
 <button onclick="answer_challenge()">Answer verifier challenge (anti-replay)</button>
+<button onclick="fetch_code()">Show fallback code (feature phones)</button>
 <div id="qr">—</div>
 <div>Fallback code: <span id="code">—</span></div>
 <div>Expires in <span id="ttl">—</span></div>
@@ -36,6 +37,14 @@ async function answer_challenge(){
   cred=await r.json();exp=cred.exp||0;
   document.getElementById('qr').textContent=JSON.stringify(cred);
   tick();
+}
+async function fetch_code(){
+  const iss=document.getElementById('iss').value;
+  const q=new URLSearchParams({user_id:document.getElementById('uid').value,
+    verifier_id:document.getElementById('shop').value});
+  const r=await fetch(iss+'/otp?'+q);
+  const j=await r.json();
+  document.getElementById('code').textContent=j.code||JSON.stringify(j);
 }
 </script>
 </body></html>

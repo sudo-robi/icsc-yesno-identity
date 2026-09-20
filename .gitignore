@@ -2,6 +2,7 @@ __pycache__/
 *.pyc
 .venv/
 keys/*.hex
+keys/*.key
 issuer/issuer.db
 verifier/receipts.db
 verifier/trustbundle.json

@@ -5,7 +5,7 @@
 <h1>Issuer <code>{{ iss }}</code></h1>
 <p>Pubkey: <code>{{ pub }}</code></p>
 <p>Revlist v{{ rev.v }} revoked: {{ rev.revoked }}</p>
-<h2>Synthetic users (no real PII)</h2>
+<h2>Synthetic users (seed data — no real PII; enrollment identity proofing is out of scope for this prototype)</h2>
 <table><tr><th>ID</th><th>DOB</th><th>Revoked</th><th>Issue</th></tr>
 {% for u in users %}<tr><td>{{ u.id }}</td><td>{{ u.dob }}</td><td>{{ u.revoked }}</td>
 <td><button onclick="issue('{{ u.id }}')">Issue for SHOP-A</button></td></tr>{% endfor %}</table>

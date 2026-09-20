@@ -1,17 +1,46 @@
+# Render blueprint. NOTE on persistence: Render disks need a paid instance type,
+# so the free tier is ephemeral (SQLite/keys/receipts reset on redeploy — re-pair
+# after deploys, same as serverless). Uncomment the disk blocks + set instance
+# type when you outgrow the demo tier; the apps already honor these env paths.
 services:
   - type: web
     name: icsc-issuer
     env: python
+    # Single worker: the challenge-nonce registry and SQLite live in-process.
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn issuer.app:app --bind 0.0.0.0:$PORT
+    startCommand: gunicorn issuer.app:app --bind 0.0.0.0:$PORT --workers 1
     envVars:
       - key: ISSUER_ID
         value: NIMC-TEST-01
+      - key: BEHIND_PROXY
+        value: 1
+      # - key: ISSUER_DB
+      #   value: /data/issuer.db
+      # - key: ISSUER_KEYDIR
+      #   value: /data/keys
+    # disk:
+    #   name: issuer-data
+    #   mountPath: /data
+    #   sizeGB: 1
   - type: web
     name: icsc-verifier
     env: python
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn verifier.app:app --bind 0.0.0.0:$PORT
+    startCommand: gunicorn verifier.app:app --bind 0.0.0.0:$PORT --workers 1
     envVars:
       - key: VERIFIER_ID
         value: SHOP-A
+      - key: BEHIND_PROXY
+        value: 1
+      # - key: VERIFIER_DB
+      #   value: /data/receipts.db
+      # - key: TRUSTBUNDLE_PATH
+      #   value: /data/trustbundle.json
+      # - key: OTP_SECRETS_PATH
+      #   value: /data/otp_secrets.json
+      # - key: RECEIPT_KEY_DIR
+      #   value: /data/keys
+    # disk:
+    #   name: verifier-data
+    #   mountPath: /data
+    #   sizeGB: 1

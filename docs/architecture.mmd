@@ -43,7 +43,7 @@ node_issuer_api -->|"reads user"| node_issuer_records
 node_issuer_api -->|"loads keys"| node_issuer_keys
 
 %% Trust distribution (out-of-band)
-node_issuer_api -->|"publishes trust"| node_pairing_actor
+node_issuer_api -->|"publishes signed bundle<br/>[/bundle]"| node_pairing_actor
 node_pairing_actor -->|"syncs bundle"| node_verifier_api
 node_verifier_api -->|"writes bundle"| node_trust_bundle
 node_verifier_api -->|"writes secrets"| node_otp_secrets

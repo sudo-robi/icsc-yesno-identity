@@ -62,8 +62,18 @@ def test_badsig_tampered_and_wrong_key(tmp_path):
 
 
 def test_revoked(tmp_path):
-    _trust(str(tmp_path), revoked_uids=["abcd1234efgh5678"])
+    _trust(str(tmp_path), revoked=["abcd1234efgh5678"])
     assert V.decide(_cred(), "") == ("NO", "REVOKED")
+
+
+def test_minors_list(tmp_path):
+    _trust(str(tmp_path), minors=["abcd1234efgh5678"])
+    assert V.decide(_cred(), "") == ("NO", "NOT_ADULT")
+
+
+def test_exp_wrong_type(tmp_path):
+    _trust(str(tmp_path))
+    assert V.decide(_cred(exp="tomorrow"), "")[1] == "MALFORMED"
 
 
 def test_replay_and_live_nonce(tmp_path):
