@@ -1,12 +1,66 @@
-__pycache__/
+# Dependencies
+node_modules/
+vercel/node_modules/
+holder/node_modules/
+*/package-lock.json
+vercel/package-lock.json
+holder/package-lock.json
+
+# Build outputs
+dist/
+build/
 *.pyc
+__pycache__/
+*.pyo
+*.pyd
+.Python
+
+# Virtual environments
 .venv/
-.pytest_cache/
-.coverage
-.coverage.*
-*.db
-*.db-journal
-keys/
-*.key
-.env
+venv/
+ENV/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
 .DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Test outputs
+test-results/
+*.lcov
+coverage/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Vercel
+.vercel/
+
+# IDE/Editor
+*.swp
+*.swo
+*~
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Python
+*.egg-info/
+dist/
+build/

@@ -3,7 +3,7 @@ not ignored — a signer and verifier can never silently disagree.
 """
 from shared.errors import SchemaError
 
-CRED_SIGNED_FIELDS = frozenset({"v", "iss", "sub", "vid", "a", "r", "iat", "exp", "cnf"})
+CRED_SIGNED_FIELDS = frozenset({"v", "iss", "sub", "vid", "a", "r", "iat", "exp", "cnf", "did"})
 CRED_REQUIRED_FIELDS = CRED_SIGNED_FIELDS | {"s"}
 
 BUNDLE_SIGNED_FIELDS = frozenset(
@@ -41,7 +41,7 @@ def validate_credential(cred: object) -> str | None:
         return "MALFORMED"
     if not _is_plain_int(cred.get("exp")) or not _is_plain_int(cred.get("iat")):
         return "MALFORMED"
-    for key in ("sub", "vid", "a", "iss", "cnf"):
+    for key in ("sub", "vid", "a", "iss", "cnf", "did"):
         if not isinstance(cred.get(key), str):
             return "MALFORMED"
     if not _is_plain_int(cred.get("r")) or cred["r"] not in (0, 1):

@@ -36,3 +36,6 @@ BEHIND_PROXY = os.environ.get("BEHIND_PROXY") == "1"
 PROXY_HOPS = int(os.environ.get("PROXY_HOPS", "1"))
 CORS_ALLOW_ORIGINS = [o.strip() for o in os.environ.get("CORS_ALLOW_ORIGINS", "").split(",")
                       if o.strip()]
+
+# SSE revocation push: issuer URL for auto-sync (empty = disabled)
+ISSUER_URL = os.environ.get("ISSUER_URL", "")

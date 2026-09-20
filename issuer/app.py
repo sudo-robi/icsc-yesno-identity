@@ -3,16 +3,19 @@
 Env: ISSUER_DB, ISSUER_KEYDIR, ISSUER_ID, ISSUER_PRIV_HEX, ADMIN_TOKEN (required
 outside debug), CRED_TTL_SEC, OTP_ENABLED, ENROLL_CODE_TTL_SEC, BUNDLE_TTL_SEC.
 """
+import json
 import os
+import threading
 import time
 
-from flask import jsonify, render_template, request, send_from_directory
+from flask import Response, jsonify, render_template, request, send_from_directory
 from marshmallow import Schema, fields, ValidationError
 
 import issuer.repo as repo
 from issuer import services
 from shared import config
 from shared.errors import err
+from shared.events import bus
 from shared.web import (
     admin_required, base_logger, log_event, make_app, require_admin_configured,
 )
@@ -152,6 +155,7 @@ def revoke():
     version = repo.bump_bundle_version(DB)
     repo.audit(DB, "admin", "revoke", "")
     log_event(log, "revoke", v=version)
+    bus.publish("revocation", {"v": version, "user_id": args["user_id"]})
     return {"ok": True, "v": version}
 
 
@@ -180,6 +184,7 @@ def rotate():
         version = repo.bump_bundle_version(DB)
         repo.audit(DB, "admin", "rotate-activate", "")
         log_event(log, "key_activated", v=version)
+        bus.publish("rotation", {"v": version, "pub": staged["pub"]})
         return {"ok": True, "pub": staged["pub"], "v": version}
     from shared.crypto import ed25519_keypair
 
@@ -189,6 +194,7 @@ def rotate():
     version = repo.bump_bundle_version(DB)
     repo.audit(DB, "admin", "rotate-stage", "")
     log_event(log, "key_staged", v=version)
+    bus.publish("bundle_update", {"v": version})
     return {"ok": True, "staged_pub": pub_hex,
             "fingerprint": services.fingerprint(pub_hex), "v": version}
 
@@ -239,7 +245,58 @@ def index():
                            version=repo.bundle_version(DB))
 
 
+@app.get("/events")
+def events_sse():
+    """Server-Sent Events stream for real-time revocation/rotation push.
+
+    Verifiers subscribe here. Each event is ``event: <type>\ndata: <json>\n\n``.
+    A heartbeat every 30 s keeps the connection alive through proxies.
+    """
+    q = bus.subscribe()
+    heartbeat_sec = 30
+
+    def generate():
+        try:
+            last_heartbeat = time.time()
+            while True:
+                try:
+                    payload = q.get(timeout=heartbeat_sec)
+                    yield f"event: {payload['event']}\ndata: {json.dumps(payload['data'])}\n\n"
+                    last_heartbeat = time.time()
+                except Exception:
+                    # Send heartbeat to keep connection alive
+                    if time.time() - last_heartbeat >= heartbeat_sec:
+                        yield f": heartbeat\n\n"
+                        last_heartbeat = time.time()
+        except GeneratorExit:
+            bus.unsubscribe(q)
+
+    return Response(generate(), mimetype="text/event-stream",
+                    headers={"Cache-Control": "no-cache",
+                             "X-Accel-Buffering": "no",
+                             "Connection": "keep-alive"})
+
+
+@app.get("/admin/events/status")
+@admin_required
+def events_status():
+    """How many verifiers are currently subscribed to the SSE stream."""
+    return {"subscribers": bus.subscriber_count()}
+
+
 repo.init_db(DB)
+
+
+# Background heartbeat thread — publishes a heartbeat every 30s so stale
+# subscribers are cleaned up and fresh connections stay alive.
+def _heartbeat_loop():
+    while True:
+        time.sleep(30)
+        bus.publish("heartbeat", {"ts": int(time.time())})
+
+
+_heartbeat_thread = threading.Thread(target=_heartbeat_loop, daemon=True)
+_heartbeat_thread.start()
 
 
 if __name__ == "__main__":  # pragma: no cover - dev entrypoint

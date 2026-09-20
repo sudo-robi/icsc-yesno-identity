@@ -23,7 +23,7 @@ def _trust(pub, **kw):
 def _cred(priv, holder_pub, **kw):
     body = {"v": 1, "iss": "T", "sub": "ab" * 16, "vid": "SHOP-A",
             "a": "over_18", "r": 1, "iat": 100, "exp": 9999999999,
-            "cnf": holder_pub}
+            "cnf": holder_pub, "did": "device1"}
     body.update(kw)
     body["s"] = ed25519_sign(priv, canonical(signed_body(body)))
     return body
@@ -47,7 +47,7 @@ def _proof(key, cred, nonce, vid="SHOP-A", ts=1000):
 
     msg = services.proof_message(
         cred_canonical_sha=sha256_hex(canonical(signed_body(cred))),
-        nonce=nonce, vid=vid, ts=ts)
+        nonce=nonce, vid=vid, ts=ts, did=cred.get("did", ""))
     der = key.sign(msg, _ec.ECDSA(SHA256()))
     r, s = decode_dss_signature(der)
     return {"n": nonce, "ts": ts,
@@ -279,4 +279,10 @@ def test_fingerprint_and_reasons():
 def test_proof_message_vector():
     msg = services.proof_message(cred_canonical_sha="ab", nonce="n",
                                  vid="SHOP-A", ts=5)
-    assert msg == b'["yn-proof-v1","ab","n","SHOP-A",5]'
+    assert msg == b'["yn-proof-v1","ab","n","SHOP-A",5,""]'
+
+
+def test_proof_message_with_did():
+    msg = services.proof_message(cred_canonical_sha="ab", nonce="n",
+                                 vid="SHOP-A", ts=5, did="abc123")
+    assert msg == b'["yn-proof-v1","ab","n","SHOP-A",5,"abc123"]'

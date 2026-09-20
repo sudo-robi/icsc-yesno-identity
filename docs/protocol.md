@@ -51,7 +51,7 @@ join records. Used as credential `sub`, bundle list entries, and OTP-secret map 
 Signed fields (`shared/schemas.py::CRED_SIGNED_FIELDS`):
 
 ```
-v, iss, sub, vid, a, r, iat, exp, cnf
+v, iss, sub, vid, a, r, iat, exp, cnf, did
 ```
 
 Required = signed fields + `s`. **Unknown extra fields are REJECTED**
@@ -60,7 +60,8 @@ Required = signed fields + `s`. **Unknown extra fields are REJECTED**
 ```json
 {"v": 1, "iss": "NIMC-TEST-01", "sub": "<32-hex pseudonym>", "vid": "SHOP-A",
  "a": "over_18", "r": 0, "iat": 1700000000, "exp": 1700003600,
- "cnf": "<holder P-256 pub b64u>", "s": "<issuer Ed25519 sig b64u>"}
+ "cnf": "<holder P-256 pub b64u>", "did": "<32-hex device fingerprint>",
+ "s": "<issuer Ed25519 sig b64u>"}
 ```
 
 Built by `issuer/services.py::issue_credential`:
@@ -69,6 +70,7 @@ Built by `issuer/services.py::issue_credential`:
 {"v": 1, "iss": issuer_id, "sub": pseudonym(master_secret, verifier_id),
  "vid": verifier_id, "a": "over_18", "r": 1 if is_adult(dob) else 0,
  "iat": int(now), "exp": int(now) + ttl_sec, "cnf": holder_pub_b64u,
+ "did": sha256_hex(f"{holder_pub_b64u}|{verifier_id}")[:32],
  "s": ed25519_sign(priv_hex, canonical(signed_body(payload)))}
 ```
 
@@ -90,8 +92,9 @@ Built by `issuer/services.py::issue_credential`:
 - Exact signed bytes (`verifier/services.py::proof_message`):
 
 ```python
-canonical(["yn-proof-v1", cred_canonical_sha, nonce, vid, ts])
+canonical(["yn-proof-v1", cred_canonical_sha, nonce, vid, ts, did])
 # cred_canonical_sha = sha256_hex(canonical(signed_body(cred)))
+# did = cred.get("did", "")  # device fingerprint for auditability
 ```
 
 i.e. the canonical JSON list `["yn-proof-v1", sha256, n, vid, ts]` where `sha256`
@@ -180,11 +183,28 @@ body `{"bundle": {...}}` or the bare bundle):
 
 ## 8. OTP fallback design
 
+**⚠️ TRUST MODEL WARNING:** OTP mode is weaker **by design**.
+
 Purpose-built for feature phones; reduced assurance **by design** (the shop holds
 the secrets and can mint codes — unlike QR mode where only the holder device
 can sign). Gated by `OTP_ENABLED` (`shared/config.py`); both
 `GET /issuer/admin/otp-secrets` and `POST /verify_code` return `OTP_DISABLED`
 (404) when off.
+
+### Trust comparison: QR mode vs OTP mode
+
+| Aspect | QR mode (P-256) | OTP mode (HMAC) |
+|---|---|---|
+| Who can mint valid proofs | Only the holder device (private key) | Anyone with the OTP secret (shop staff) |
+| Replay protection | Fresh challenge nonce (single-use) | HMAC step window (30s) + single-use |
+| Device binding | `cnf` key bound to holder device | None — code works on any phone |
+| Revocation enforcement | Bundle check on every verify | Bundle check on every verify |
+| Assumption | Holder device is trusted | Shop operator is trusted |
+| Use case | Smartphones with camera | Feature phones (dumb phones) |
+
+**Bottom line:** OTP mode trusts the shop operator not to mint fake codes.
+QR mode only trusts the holder's device. Use OTP only when QR scanning is
+impossible (feature phones, poor camera, accessibility needs).
 
 - Provisioning (admin channel only): `GET /admin/otp-secrets?vid=` on the issuer
   returns `{vid, secrets}` where `secrets` maps **`sub → otp_secret`** and

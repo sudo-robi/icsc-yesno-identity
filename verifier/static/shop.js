@@ -3,23 +3,37 @@
  */
 "use strict";
 
-var scanner = null, resetTimer = null;
+var scanner = null, resetTimer = null, wakeLock = null;
 
 function $(id){ return document.getElementById(id); }
 function say(msg){ $("msg").textContent = msg; }
 function reasons(){ return (window.ScanUtil && ScanUtil.REASON_MESSAGES) || {}; }
 
+function haptic(pattern){
+  if (navigator.vibrate) navigator.vibrate(pattern);
+}
+
 function showResult(ok, word, icon, why){
   var box = $("result");
   box.className = "show " + (ok ? "yes" : "no");
+  box.classList.remove("animate-scale-in", "shake");
+  void box.offsetWidth;
+  box.classList.add("animate-scale-in");
+  if (!ok) box.classList.add("shake");
   $("resultIcon").textContent = icon;
   $("resultWord").textContent = word;
   $("resultWord").style.color = ok ? "var(--ok)" : "var(--no)";
   $("resultWhy").textContent = why;
+  haptic(ok ? [30, 20, 30] : [80, 40, 80]);
   if (resetTimer) clearTimeout(resetTimer);
   resetTimer = setTimeout(hideResult, 4000);
 }
-function hideResult(){ $("result").className = ""; }
+function hideResult(){
+  var box = $("result");
+  box.classList.remove("animate-scale-in");
+  box.style.animation = "fadeIn 150ms ease-out reverse forwards";
+  setTimeout(() => { box.className = ""; box.style.animation = ""; }, 150);
+}
 
 async function api(path, opts){
   var res = await fetch(path, opts);
@@ -61,13 +75,26 @@ async function freshChallenge(auto){
   try {
     var r = await api("/challenge");
     var nonce = r.json.nonce;
-    $("nonce").textContent = nonce;
+    const nonceEl = $("nonce");
+    nonceEl.textContent = nonce;
+    pulseElement(nonceEl);
     var challenge = JSON.stringify({n: nonce, vid: document.title.replace("Shop check — ", ""), exp: 0});
-    if (window.QRScanner) QRScanner.drawQR($("challengeQR"), challenge);
+    if (window.QRScanner) {
+      QRScanner.drawQR($("challengeQR"), challenge);
+      pulseElement($("challengeQR"), 300);
+    }
   } catch (e) {
     if (!auto) say("Couldn't fetch a challenge — check the connection.");
     $("nonce").textContent = "unavailable";
   }
+}
+
+function pulseElement(el, duration = 300){
+  if (!el) return;
+  el.classList.remove("animate-pulse");
+  void el.offsetWidth;
+  el.classList.add("animate-pulse");
+  setTimeout(() => el.classList.remove("animate-pulse"), duration);
 }
 
 function currentNonce(){
@@ -132,12 +159,13 @@ async function toggleScan(){
       doVerify(text);
     }
   });
+  $("videoWrap").hidden = false;
+  animateIn($("videoWrap"));
   $("backendNote").textContent = scanner.backend() === "native"
     ? "Fast native scan." : scanner.backend() === "jsqr"
     ? "Compatibility scan (slower)." : "";
   var cams = await scanner.refreshCameras();
   $("switchBtn").hidden = cams.length < 2;
-  $("videoWrap").hidden = false;
   var r = await scanner.start();
   if (!r.ok) {
     stopScanUI();
@@ -147,12 +175,35 @@ async function toggleScan(){
   $("scanBtn").textContent = "Stop camera";
   $("torchBtn").hidden = !scanner.torchSupported();
   say("Point the camera at the QR code.");
+  // Request wake lock to prevent screen dimming during scanning
+  if ("wakeLock" in navigator) {
+    try { wakeLock = await navigator.wakeLock.request("screen"); }
+    catch (e) { /* wake lock not available */ }
+  }
 }
 function stopScanUI(){
   if (scanner) scanner.stop();
-  $("videoWrap").hidden = true;
+  animateOut($("videoWrap"), 150).then(() => { $("videoWrap").hidden = true; });
   $("scanBtn").textContent = "Start camera";
   $("torchBtn").hidden = true;
+  if (wakeLock) { wakeLock.release(); wakeLock = null; }
+}
+
+function animateIn(el, animation = "animate-scale-in"){
+  if (!el) return;
+  el.hidden = false;
+  el.classList.remove(animation);
+  void el.offsetWidth;
+  el.classList.add(animation);
+}
+
+function animateOut(el, duration = 150){
+  if (!el) return Promise.resolve();
+  return new Promise(resolve => {
+    el.classList.remove("animate-scale-in");
+    el.style.animation = `fadeIn ${duration}ms ease-out reverse forwards`;
+    setTimeout(() => { el.hidden = true; el.style.animation = ""; resolve(); }, duration);
+  });
 }
 async function toggleTorch(){
   if (!scanner) return;
@@ -281,6 +332,32 @@ async function loadRecent(){
   $("csvBtn").addEventListener("click", exportCsv);
   $("syncBtn").addEventListener("click", syncBundle);
   $("result").addEventListener("click", hideResult);
+  
+  // Admin drawer focus trap
+  const adminDrawer = $("adminDrawer");
+  let lastFocused = null;
+  adminDrawer.addEventListener("toggle", function(){
+    if (adminDrawer.open) {
+      lastFocused = document.activeElement;
+      $("adminToken").focus();
+      document.body.style.overflow = "hidden";
+    } else {
+      document.body.style.overflow = "";
+      if (lastFocused) lastFocused.focus();
+    }
+  });
+  
+  // Keyboard shortcuts
+  document.addEventListener("keydown", function(e){
+    if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+    if (e.key === "s" && !e.metaKey && !e.ctrlKey) { e.preventDefault(); $("scanBtn").click(); }
+    if (e.key === "n" && !e.metaKey && !e.ctrlKey) { e.preventDefault(); $("nonceBtn").click(); }
+    if (e.key === "Escape") { hideResult(); if (adminDrawer.open) adminDrawer.open = false; }
+  });
+  
+  // Prevent pull-to-refresh during scanning
+  document.body.style.overscrollBehaviorY = "contain";
+  
   var camOk = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
   if (!camOk) {
     var noCam = $("noCamMsg");

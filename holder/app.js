@@ -6,10 +6,62 @@
 
 /* ---------- tiny helpers ---------- */
 function $(id){ return document.getElementById(id); }
-function showError(msg){ $("err").textContent = msg; }
-function clearError(){ $("err").textContent = ""; }
-function showOk(msg){ $("okmsg").textContent = msg; }
 
+function showError(msg){
+  const el = $("err");
+  el.textContent = msg;
+  el.hidden = false;
+  el.classList.remove("animate-fade-in");
+  void el.offsetWidth;
+  el.classList.add("animate-fade-in");
+}
+
+function clearError(){
+  const el = $("err");
+  el.textContent = "";
+  el.hidden = true;
+}
+
+function showOk(msg){
+  const el = $("okmsg");
+  el.textContent = msg;
+  el.hidden = false;
+  el.classList.remove("animate-fade-in");
+  void el.offsetWidth;
+  el.classList.add("animate-fade-in");
+}
+
+/* ---------- animation helpers ---------- */
+function animateIn(el, animation = "animate-scale-in"){
+  if (!el) return;
+  el.hidden = false;
+  el.classList.remove(animation);
+  void el.offsetWidth;
+  el.classList.add(animation);
+}
+
+function animateOut(el, animation = "animate-fade-in", duration = 150){
+  if (!el) return Promise.resolve();
+  return new Promise(resolve => {
+    el.classList.remove("animate-scale-in");
+    el.style.animation = `fadeIn ${duration}ms ease-out reverse forwards`;
+    setTimeout(() => {
+      el.hidden = true;
+      el.style.animation = "";
+      resolve();
+    }, duration);
+  });
+}
+
+function pulseElement(el, duration = 300){
+  if (!el) return;
+  el.classList.remove("animate-pulse");
+  void el.offsetWidth;
+  el.classList.add("animate-pulse");
+  setTimeout(() => el.classList.remove("animate-pulse"), duration);
+}
+
+/* ---------- crypto helpers ---------- */
 function b64uEncode(bytes){
   var bin = "";
   bytes.forEach(function(b){ bin += String.fromCharCode(b); });
@@ -21,7 +73,6 @@ function hexToBytes(hex){
   return out;
 }
 function canonicalJSON(value){
-  // Sorted keys, (",", ":") separators, UTF-8, no floats — mirrors shared/canonical.py.
   if (typeof value === "number" && !Number.isInteger(value)) throw new Error("no-floats");
   if (value === null || typeof value !== "object") return JSON.stringify(value);
   if (Array.isArray(value)) return "[" + value.map(canonicalJSON).join(",") + "]";
@@ -138,15 +189,21 @@ async function renderHome(){
   var list = [];
   try { list = await idbAll(); }
   catch (e) { showError("Device storage unavailable — this browser can't keep keys."); return; }
-  $("onboardState").hidden = list.length > 0;
-  $("homeState").hidden = list.length === 0;
+  const hasCreds = list.length > 0;
+  await animateOut($("onboardState"), "animate-fade-in", 100);
+  await animateOut($("homeState"), "animate-fade-in", 100);
+  $("onboardState").hidden = hasCreds;
+  $("homeState").hidden = !hasCreds;
+  if (hasCreds) animateIn($("homeState"));
+  else animateIn($("onboardState"));
   var wrap = $("credList");
   while (wrap.firstChild) wrap.removeChild(wrap.firstChild);
   if (!list.length) return;
-  list.forEach(function(rec){
+  list.forEach(function(rec, i){
     var st = credState(rec.cred);
     var row = document.createElement("div");
-    row.className = "credrow";
+    row.className = "credrow animate-scale-in";
+    row.style.animationDelay = (i * 50) + "ms";
     var info = document.createElement("div");
     var title = document.createElement("strong");
     title.textContent = rec.vid;
@@ -179,7 +236,13 @@ function showOnboard(){
 }
 async function backHome(){
   stopChallengeScan();
-  ["showState", "challengeState", "otpState"].forEach(function(id){ $(id).hidden = true; });
+  if (tickTimer) clearInterval(tickTimer);
+  if (otpTimer) clearInterval(otpTimer);
+  await Promise.all([
+    animateOut($("showState")),
+    animateOut($("challengeState")),
+    animateOut($("otpState"))
+  ]);
   renderHome();
 }
 
@@ -187,8 +250,10 @@ async function backHome(){
 function openChallenge(vid){
   activeVid = vid;
   clearError();
-  $("homeState").hidden = true;
-  $("challengeState").hidden = false;
+  animateOut($("homeState"), "animate-fade-in", 100).then(() => {
+    $("homeState").hidden = true;
+    animateIn($("challengeState"));
+  });
 }
 function stopChallengeScan(){
   if (challengeScanner) { challengeScanner.stop(); challengeScanner = null; }
@@ -258,7 +323,8 @@ async function answerWithNonce(nonce){
     var ts = Math.floor(Date.now() / 1000);
     var credCanon = canonicalJSON(stripSig(rec.cred));
     var credHash = await sha256hexBytes(new TextEncoder().encode(credCanon));
-    var msg = canonicalJSON(["yn-proof-v1", credHash, nonce, activeVid, ts]);
+    var did = (rec.cred && rec.cred.did) || "";
+    var msg = canonicalJSON(["yn-proof-v1", credHash, nonce, activeVid, ts, did]);
     var sigBuf = await crypto.subtle.sign({name: "ECDSA", hash: "SHA-256"},
       rec.key, new TextEncoder().encode(msg));
     var sig = b64uEncode(new Uint8Array(sigBuf));
@@ -279,30 +345,35 @@ async function findCred(vid){
   return null;
 }
 function showPresentation(bundle, ts){
-  $("challengeState").hidden = true;
-  $("showState").hidden = false;
-  $("showTitle").textContent = "Show this to the shop";
-  var text = JSON.stringify(bundle);
-  $("rawJson").textContent = text;
-  if (!window.QRScanner || !QRScanner.drawQR($("qrCanvas"), text)) {
-    showError("Couldn't draw the QR — use Copy JSON under Advanced.");
-    return;
-  }
-  showOk("Answer ready — valid about a minute.");
-  if (tickTimer) clearInterval(tickTimer);
-  tickTimer = setInterval(function(){
-    var left = 60 - (Math.floor(Date.now() / 1000) - ts);
-    $("proofTtl").textContent = left > 0 ? "Use within " + left + "s" : "Expired — answer again.";
-    if (left <= 0) clearInterval(tickTimer);
-  }, 1000);
+  animateOut($("challengeState"), "animate-fade-in", 100).then(() => {
+    $("challengeState").hidden = true;
+    animateIn($("showState"));
+    $("showTitle").textContent = "Show this to the shop";
+    var text = JSON.stringify(bundle);
+    $("rawJson").textContent = text;
+    if (!window.QRScanner || !QRScanner.drawQR($("qrCanvas"), text)) {
+      showError("Couldn't draw the QR — use Copy JSON under Advanced.");
+      return;
+    }
+    showOk("Answer ready — valid about a minute.");
+    pulseElement($("qrCanvas"), 400);
+    if (tickTimer) clearInterval(tickTimer);
+    tickTimer = setInterval(function(){
+      var left = 60 - (Math.floor(Date.now() / 1000) - ts);
+      $("proofTtl").textContent = left > 0 ? "Use within " + left + "s" : "Expired — answer again.";
+      if (left <= 0) clearInterval(tickTimer);
+    }, 1000);
+  });
 }
 
 /* ---------- OTP fallback ---------- */
 async function openOtp(vid){
   activeVid = vid;
-  $("homeState").hidden = true;
-  $("otpState").hidden = false;
-  tickOtp();
+  animateOut($("homeState"), "animate-fade-in", 100).then(() => {
+    $("homeState").hidden = true;
+    animateIn($("otpState"));
+    tickOtp();
+  });
 }
 async function tickOtp(){
   try {
@@ -310,7 +381,9 @@ async function tickOtp(){
     if (!rec || !rec.otp_secret) { showError("No fallback secret on this device."); return; }
     var step = Math.floor(Date.now() / 1000 / 30);
     var code = await hmacCode(hexToBytes(rec.otp_secret), activeVid + "|" + step);
-    $("otpCode").textContent = code.slice(0, 3) + " " + code.slice(3);
+    const otpEl = $("otpCode");
+    otpEl.textContent = code.slice(0, 3) + " " + code.slice(3);
+    pulseElement(otpEl, 300);
   } catch (e) { showError("Couldn't compute the code."); return; }
   if (otpTimer) clearInterval(otpTimer);
   otpTimer = setInterval(function(){

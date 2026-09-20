@@ -25,7 +25,8 @@ PORT=5002 $PY -m verifier.app & VERIFIER_PID=$!
 trap 'kill $ISSUER_PID $VERIFIER_PID 2>/dev/null' EXIT
 
 for i in $(seq 1 50); do
-  curl -sf http://localhost:5001/healthz >/dev/null && break
+  curl -sf http://localhost:5001/healthz >/dev/null && \
+  curl -sf http://localhost:5002/healthz >/dev/null && break
   sleep 0.2
 done
 

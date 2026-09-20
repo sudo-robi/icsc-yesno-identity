@@ -1,81 +1,83 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="theme-color" content="#1d4ed8">
-<title>My ID — Yes/No</title>
-<link rel="manifest" href="./manifest.webmanifest">
-<link rel="stylesheet" href="./static/app.css">
-<link rel="icon" href="./static/icon.svg" type="image/svg+xml">
-<script src="./static/vendor/qrcode-lib.js" defer></script>
-<script src="./static/vendor/scanutil.js" defer></script>
-<script src="./static/vendor/scanner.js" defer></script>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#1d4ed8">
+  <title>My ID — Yes/No</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/shared/static/design-tokens.css">
+  <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
-<h1>My ID</h1>
-<p class="sub">Shows <strong>yes / no</strong> only — never your name or birth date.</p>
+  <header>
+    <h1>My ID</h1>
+    <p class="sub">Shows <strong>yes / no</strong> only — never your name or birth date.</p>
+  </header>
 
-<div id="err" role="alert" aria-live="assertive"></div>
-<div id="okmsg" role="status" aria-live="polite"></div>
+  <div id="err" role="alert" aria-live="assertive"></div>
+  <div id="okmsg" role="status" aria-live="polite"></div>
 
-<section id="onboardState" class="card" aria-label="Enroll this device">
-  <h2>First: enroll this phone</h2>
-  <p class="muted">Enter the one-time code from the issuer, pick the shop. A private
-  key is generated <em>on this device</em> and never leaves it.</p>
-  <label>Enrollment code <input id="enrollCode" autocomplete="off" spellcheck="false" class="wide"></label>
-  <label>Shop
-    <select id="enrollShop"><option>SHOP-A</option><option>SHOP-B</option></select>
-  </label>
-  <div class="row"><button class="primary" id="enrollBtn">Get my ID</button></div>
-</section>
+  <section id="onboardState" class="card" aria-label="Enroll this device">
+    <h2>First: enroll this phone</h2>
+    <p class="muted">Enter the one-time code from the issuer, pick the shop. A private
+    key is generated <em>on this device</em> and never leaves it.</p>
+    <label>Enrollment code <input id="enrollCode" autocomplete="off" spellcheck="false" class="wide"></label>
+    <label>Shop
+      <select id="enrollShop"><option>SHOP-A</option><option>SHOP-B</option></select>
+    </label>
+    <div class="row"><button class="primary" id="enrollBtn">Get my ID</button></div>
+  </section>
 
-<section id="homeState" hidden aria-label="Your credentials">
-  <div id="credList"></div>
-  <div class="row"><button id="addShopBtn">Add another shop</button></div>
-</section>
+  <section id="homeState" hidden aria-label="Your credentials">
+    <div id="credList"></div>
+    <div class="row"><button id="addShopBtn">Add another shop</button></div>
+  </section>
 
-<section id="showState" class="card" hidden aria-label="Show ID">
-  <h2 id="showTitle">Show ID</h2>
-  <canvas id="qrCanvas" width="260" height="260" role="img" aria-label="ID QR code"></canvas>
-  <p class="muted" id="proofTtl" aria-live="polite"></p>
-  <div class="row"><button id="doneBtn">Done</button></div>
-</section>
+  <section id="showState" class="card" hidden aria-label="Show ID">
+    <h2 id="showTitle">Show this to the shop</h2>
+    <canvas id="qrCanvas" width="260" height="260" role="img" aria-label="ID QR code"></canvas>
+    <p class="muted" id="proofTtl" aria-live="polite"></p>
+    <div class="row"><button id="doneBtn">Done</button></div>
+  </section>
 
-<section id="challengeState" class="card" hidden aria-label="Answer a shop challenge">
-  <h2>Scan the shop's challenge</h2>
-  <div class="row"><button id="scanBtn">Scan shop QR</button></div>
-  <video id="scanVideo" playsinline muted hidden aria-label="Challenge scanner"></video>
-  <p class="muted" id="scanHint" hidden></p>
-  <label>…or paste the challenge JSON
-    <input id="challengeInput" autocomplete="off" spellcheck="false" class="wide"
-      placeholder='{"n":…, "vid":…, "exp":…}'>
-  </label>
-  <div class="row"><button class="primary" id="answerBtn">Show my ID</button></div>
-</section>
+  <section id="challengeState" class="card" hidden aria-label="Answer a shop challenge">
+    <h2>Scan the shop's challenge</h2>
+    <div class="row"><button id="scanBtn">Scan shop QR</button></div>
+    <div id="videoWrapper" hidden>
+      <video id="scanVideo" playsinline muted aria-label="Challenge scanner"></video>
+      <p class="muted" id="scanHint" hidden></p>
+    </div>
+    <label>…or paste the challenge JSON
+      <input id="challengeInput" autocomplete="off" spellcheck="false" class="wide"
+        placeholder='{"n":…, "vid":…, "exp":…}'>
+    </label>
+    <div class="row"><button class="primary" id="answerBtn">Show my ID</button></div>
+  </section>
 
-<section id="otpState" class="card" hidden aria-label="Fallback code">
-  <h2>No camera? Read this code aloud</h2>
-  <div id="otpCode" aria-live="polite">——— ———</div>
-  <p class="muted" id="otpTtl"></p>
-</section>
+  <section id="otpState" class="card" hidden aria-label="Fallback code">
+    <h2>No camera? Read this code aloud</h2>
+    <div id="otpCode" aria-live="polite">——— ———</div>
+    <p class="muted" id="otpTtl"></p>
+  </section>
 
-<details>
-  <summary>Demo settings</summary>
-  <label>Issuer URL <input id="iss" value="http://localhost:5001" inputmode="url" class="wide"></label>
-  <p class="muted">Issuer URL is the only setting. Test IDs live on the issuer, not here.</p>
-</details>
+  <details class="card">
+    <summary>Demo settings</summary>
+    <label>Issuer URL <input id="iss" value="http://localhost:5001" inputmode="url" class="wide"></label>
+    <p class="muted">Issuer URL is the only setting. Test IDs live on the issuer, not here.</p>
+  </details>
 
-<details>
-  <summary>Advanced</summary>
-  <pre id="rawJson">Nothing yet.</pre>
-  <div class="row"><button id="copyBtn">Copy JSON</button></div>
-  <h2>This device</h2>
-  <p class="muted">Keys are non-extractable: they cannot be exported or copied to
-  another phone. Forgetting wipes them permanently.</p>
-  <div class="row"><button id="forgetBtn">Forget this device</button></div>
-</details>
+  <details class="card">
+    <summary>Advanced</summary>
+    <pre id="rawJson">Nothing yet.</pre>
+    <div class="row"><button id="copyBtn">Copy JSON</button></div>
+    <h2>This device</h2>
+    <p class="muted">Keys are non-extractable: they cannot be exported or copied to
+    another phone. Forgetting wipes them permanently.</p>
+    <div class="row"><button class="danger" id="forgetBtn">Forget this device</button></div>
+  </details>
 
-<script src="./app.js"></script>
+  <script type="module" src="/src/main.js"></script>
 </body>
 </html>

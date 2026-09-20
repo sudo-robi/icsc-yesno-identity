@@ -7,7 +7,8 @@ from shared.errors import REASONS, SchemaError, err
 
 def _cred(**kw):
     body = {"v": 1, "iss": "T", "sub": "ab" * 16, "vid": "SHOP-A",
-            "a": "over_18", "r": 1, "iat": 100, "exp": 200, "cnf": "k"}
+            "a": "over_18", "r": 1, "iat": 100, "exp": 200, "cnf": "k",
+            "did": "device1"}
     body.update(kw)
     body["s"] = "sig"
     return body

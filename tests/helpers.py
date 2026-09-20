@@ -49,7 +49,7 @@ def make_proof(key, cred, nonce, vid="SHOP-A", ts=None):
     ts = int(time.time()) if ts is None else ts
     msg = verifier_services.proof_message(
         cred_canonical_sha=sha256_hex(canonical(signed_body(cred))),
-        nonce=nonce, vid=vid, ts=ts)
+        nonce=nonce, vid=vid, ts=ts, did=cred.get("did", ""))
     der = key.sign(msg, _ec.ECDSA(SHA256()))
     r, s = decode_dss_signature(der)
     return {"n": nonce, "ts": ts,

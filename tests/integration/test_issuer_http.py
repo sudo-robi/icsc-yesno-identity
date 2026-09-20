@@ -52,7 +52,7 @@ def test_enroll_happy_path(client):
     body = r.get_json()
     cred = body["credential"]
     assert cred["vid"] == "SHOP-A" and cred["r"] == 1 and "s" in cred
-    assert set(cred) == {"v", "iss", "sub", "vid", "a", "r", "iat", "exp", "cnf", "s"}
+    assert set(cred) == {"v", "iss", "sub", "vid", "a", "r", "iat", "exp", "cnf", "did", "s"}
 
 
 def test_enroll_rejects(client):

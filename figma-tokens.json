@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json.schemastore.org/figma-tokens",
+  "version": "1.0.0",
+  "name": "Yes/No Identity Design Tokens",
+  "description": "Design tokens for the Yes/No Identity offline age verification system",
+  "global": {
+    "color": {
+      "bg": { "value": "#ffffff", "type": "color" },
+      "fg": { "value": "#111827", "type": "color" },
+      "muted": { "value": "#6b7280", "type": "color" },
+      "mutedStrong": { "value": "#4b5563", "type": "color" },
+      "card": { "value": "#f3f4f6", "type": "color" },
+      "cardHover": { "value": "#e5e7eb", "type": "color" },
+      "border": { "value": "#d1d5db", "type": "color" },
+      "borderStrong": { "value": "#9ca3af", "type": "color" },
+      "primary": { "value": "#1d4ed8", "type": "color" },
+      "primaryHover": { "value": "#1e40af", "type": "color" },
+      "primaryFg": { "value": "#ffffff", "type": "color" },
+      "success": { "value": "#047857", "type": "color" },
+      "successBg": { "value": "#dcfce7", "type": "color" },
+      "successFg": { "value": "#065f46", "type": "color" },
+      "danger": { "value": "#b91c1c", "type": "color" },
+      "dangerBg": { "value": "#fee2e2", "type": "color" },
+      "dangerFg": { "value": "#991b1b", "type": "color" },
+      "warning": { "value": "#d97706", "type": "color" },
+      "warningBg": { "value": "#fef3c7", "type": "color" },
+      "warningFg": { "value": "#92400e", "type": "color" },
+      "info": { "value": "#0369a1", "type": "color" },
+      "infoBg": { "value": "#dbeafe", "type": "color" },
+      "infoFg": { "value": "#075985", "type": "color" }
+    },
+    "colorDark": {
+      "bg": { "value": "#0f172a", "type": "color" },
+      "fg": { "value": "#f8fafc", "type": "color" },
+      "muted": { "value": "#94a3b8", "type": "color" },
+      "mutedStrong": { "value": "#64748b", "type": "color" },
+      "card": { "value": "#1e293b", "type": "color" },
+      "cardHover": { "value": "#334155", "type": "color" },
+      "border": { "value": "#334155", "type": "color" },
+      "borderStrong": { "value": "#475569", "type": "color" },
+      "primary": { "value": "#3b82f6", "type": "color" },
+      "primaryHover": { "value": "#60a5fa", "type": "color" },
+      "primaryFg": { "value": "#0f172a", "type": "color" },
+      "success": { "value": "#22c55e", "type": "color" },
+      "successBg": { "value": "#14532d", "type": "color" },
+      "successFg": { "value": "#bbf7d0", "type": "color" },
+      "danger": { "value": "#ef4444", "type": "color" },
+      "dangerBg": { "value": "#7f1d1d", "type": "color" },
+      "dangerFg": { "value": "#fecaca", "type": "color" },
+      "warning": { "value": "#f59e0b", "type": "color" },
+      "warningBg": { "value": "#78350f", "type": "color" },
+      "warningFg": { "value": "#fde68a", "type": "color" },
+      "info": { "value": "#38bdf8", "type": "color" },
+      "infoBg": { "value": "#0c4a6e", "type": "color" },
+      "infoFg": { "value": "#bae6fd", "type": "color" }
+    },
+    "spacing": {
+      "xs": { "value": "0.25rem", "type": "dimension" },
+      "sm": { "value": "0.5rem", "type": "dimension" },
+      "md": { "value": "1rem", "type": "dimension" },
+      "lg": { "value": "1.5rem", "type": "dimension" },
+      "xl": { "value": "2rem", "type": "dimension" },
+      "2xl": { "value": "3rem", "type": "dimension" },
+      "3xl": { "value": "4rem", "type": "dimension" }
+    },
+    "borderRadius": {
+      "sm": { "value": "6px", "type": "dimension" },
+      "md": { "value": "10px", "type": "dimension" },
+      "lg": { "value": "14px", "type": "dimension" },
+      "full": { "value": "9999px", "type": "dimension" }
+    },
+    "typography": {
+      "fontSans": { "value": "system-ui, -apple-system, Segoe UI, Roboto, Helvetica Neue, Arial, sans-serif", "type": "fontFamily" },
+      "fontMono": { "value": "ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, monospace", "type": "fontFamily" },
+      "fontSizeXs": { "value": "0.75rem", "type": "dimension" },
+      "fontSizeSm": { "value": "0.875rem", "type": "dimension" },
+      "fontSizeBase": { "value": "1rem", "type": "dimension" },
+      "fontSizeLg": { "value": "1.125rem", "type": "dimension" },
+      "fontSizeXl": { "value": "1.25rem", "type": "dimension" },
+      "fontSize2xl": { "value": "1.5rem", "type": "dimension" },
+      "fontSize3xl": { "value": "1.875rem", "type": "dimension" },
+      "lineHeightTight": { "value": "1.1", "type": "number" },
+      "lineHeightSnug": { "value": "1.375", "type": "number" },
+      "lineHeightNormal": { "value": "1.5", "type": "number" },
+      "lineHeightRelaxed": { "value": "1.625", "type": "number" },
+      "fontWeightNormal": { "value": "400", "type": "number" },
+      "fontWeightMedium": { "value": "500", "type": "number" },
+      "fontWeightSemibold": { "value": "600", "type": "number" },
+      "fontWeightBold": { "value": "700", "type": "number" }
+    },
+    "shadow": {
+      "sm": { "value": "0 1px 2px 0 rgb(0 0 0 / 0.05)", "type": "boxShadow" },
+      "md": { "value": "0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1)", "type": "boxShadow" },
+      "lg": { "value": "0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1)", "type": "boxShadow" },
+      "xl": { "value": "0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1)", "type": "boxShadow" }
+    },
+    "transition": {
+      "fast": { "value": "100ms cubic-bezier(0.4, 0, 0.2, 1)", "type": "transition" },
+      "normal": { "value": "150ms cubic-bezier(0.4, 0, 0.2, 1)", "type": "transition" },
+      "slow": { "value": "200ms cubic-bezier(0.4, 0, 0.2, 1)", "type": "transition" },
+      "springGentle": { "value": "cubic-bezier(0.34, 1.56, 0.64, 1)", "type": "transition" },
+      "springBouncy": { "value": "cubic-bezier(0.68, -0.55, 0.265, 1.55)", "type": "transition" },
+      "springSmooth": { "value": "cubic-bezier(0.16, 1, 0.3, 1)", "type": "transition" }
+    },
+    "zIndex": {
+      "dropdown": { "value": 100, "type": "number" },
+      "modal": { "value": 200, "type": "number" },
+      "toast": { "value": 300, "type": "number" },
+      "tooltip": { "value": 400, "type": "number" }
+    },
+    "tapTarget": {
+      "base": { "value": "48px", "type": "dimension" },
+      "lg": { "value": "56px", "type": "dimension" }
+    },
+    "maxWidth": {
+      "default": { "value": "520px", "type": "dimension" },
+      "wide": { "value": "640px", "type": "dimension" }
+    }
+  }
+}

@@ -1,9 +1,307 @@
-:root{--bg:#ffffff; --fg:#111827; --muted:#6b7280;
-  --ok:#047857; --no:#b91c1c; --radius:12px; --tap:48px; color-scheme:light dark;}
-body{font-family:system-ui,sans-serif; background:var(--bg); color:var(--fg);
-  max-width:640px; margin:0 auto; padding:0 1rem 3rem;}
-button{min-height:var(--tap); border-radius:8px;}
-.card{border:1px solid var(--muted); border-radius:var(--radius); padding:.9rem; margin:.8rem 0}
-#result{font-size:2rem; font-weight:900; padding:1rem; text-align:center;}
-input.wide{width:100%}
-.tight{margin:.2rem 0}
+@import url("/shared/static/design-tokens.css");
+
+:root {
+  --max-width: 640px;
+}
+
+body {
+  max-width: var(--max-width-wide);
+  padding-top: var(--space-lg);
+  padding-bottom: var(--space-3xl);
+}
+
+h1 {
+  margin-bottom: var(--space-lg);
+  text-align: center;
+}
+
+#videoWrap {
+  position: relative;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background: var(--color-bg);
+  box-shadow: var(--shadow-lg);
+  transition: transform var(--transition-normal) var(--spring-smooth),
+              box-shadow var(--transition-normal) var(--spring-smooth),
+              opacity var(--transition-normal) var(--spring-gentle);
+}
+
+#videoWrap:not([hidden]) {
+  animation: scaleIn var(--transition-slow) var(--spring-gentle);
+}
+
+#video {
+  width: 100%;
+  display: block;
+  background: #000;
+}
+
+#challengeQR {
+  border-radius: var(--radius-md);
+  background: #fff;
+  box-shadow: var(--shadow-md);
+  transition: transform var(--transition-fast) var(--spring-gentle);
+}
+
+#challengeQR:hover {
+  transform: scale(1.02);
+}
+
+#result {
+  font-size: clamp(1.75rem, 5vw, 2.5rem);
+  font-weight: 900;
+  padding: var(--space-xl);
+  text-align: center;
+  border-radius: var(--radius-lg);
+  animation: scaleIn var(--transition-slow) var(--spring-gentle);
+  min-height: 120px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-sm);
+}
+
+#result.show {
+  animation: scaleIn var(--transition-slow) var(--spring-bouncy);
+}
+
+#result.yes {
+  background: var(--color-success-bg);
+  color: var(--color-success-fg);
+  box-shadow: 0 0 0 4px var(--color-success-bg), var(--shadow-lg);
+}
+
+#result.no {
+  background: var(--color-danger-bg);
+  color: var(--color-danger-fg);
+  box-shadow: 0 0 0 4px var(--color-danger-bg), var(--shadow-lg);
+}
+
+#resultIcon {
+  font-size: clamp(2rem, 6vw, 3rem);
+  line-height: 1;
+  animation: pulse 1s ease-in-out 2;
+}
+
+#resultWord {
+  line-height: 1.1;
+}
+
+#resultWhy {
+  font-size: var(--font-size-base);
+  font-weight: 500;
+  opacity: 0.9;
+  max-width: 90%;
+}
+
+#msg {
+  min-height: 1.5em;
+  font-size: var(--font-size-sm);
+  text-align: center;
+}
+
+.challengeRow {
+  display: flex;
+  gap: var(--space-lg);
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin: var(--space-lg) 0;
+}
+
+.challengeRow > div {
+  flex: 1 1 200px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.nonce {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-base);
+  background: var(--color-card);
+  padding: var(--space-sm) var(--space-md);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  letter-spacing: 0.05em;
+  transition: border-color var(--transition-fast) var(--spring-smooth),
+              box-shadow var(--transition-fast) var(--spring-smooth);
+}
+
+.nonce:focus-within {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px var(--color-info-bg);
+}
+
+#recentBody td {
+  padding: var(--space-sm) var(--space-md);
+  border-bottom: 1px solid var(--color-border);
+  font-size: var(--font-size-sm);
+}
+
+#recentBody tr:last-child td { border-bottom: none; }
+
+#recentBody td:first-child { color: var(--color-muted-strong); }
+#recentBody td:nth-child(2) { font-weight: 600; text-align: center; }
+#recentBody td:nth-child(3) { text-align: center; color: var(--color-muted); }
+
+#adminDrawer {
+  max-width: 100%;
+  position: relative;
+}
+
+#adminDrawer summary {
+  font-size: var(--font-size-base);
+}
+
+#adminDrawer[open] .admin-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  animation: fadeIn var(--transition-normal) var(--spring-gentle);
+  z-index: calc(var(--z-modal) - 1);
+}
+
+#adminDrawer[open] .admin-panel {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(90vw, 560px);
+  max-height: 80vh;
+  overflow-y: auto;
+  z-index: var(--z-modal);
+  animation: scaleIn var(--transition-slow) var(--spring-gentle);
+  background: var(--color-card);
+  border-radius: var(--radius-lg);
+  padding: var(--space-lg);
+  box-shadow: var(--shadow-xl);
+}
+
+#adminDrawer:not([open]) .admin-panel {
+  display: none;
+}
+
+#adminToken {
+  font-family: var(--font-mono);
+  letter-spacing: 0.02em;
+}
+
+#bundleInput {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  min-height: 120px;
+  resize: vertical;
+}
+
+#adminReceipts table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-size-sm);
+}
+
+#adminReceipts th {
+  text-align: left;
+  padding: var(--space-sm) var(--space-md);
+  border-bottom: 2px solid var(--color-border);
+  font-weight: 600;
+  color: var(--color-muted-strong);
+  font-size: var(--font-size-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em.
+}
+
+#adminReceipts td {
+  padding: var(--space-sm) var(--space-md).
+  border-bottom: 1px solid var(--color-border).
+}
+
+#adminReceipts tr:hover td {
+  background: var(--color-card-hover).
+}
+
+#credInput {
+  font-family: var(--font-mono).
+  font-size: var(--font-size-xs).
+  min-height: 100px.
+  resize: vertical.
+}
+
+.badges {
+  display: flex.
+  gap: var(--space-sm).
+  flex-wrap: wrap.
+  justify-content: center.
+  margin: var(--space-md) 0.
+}
+
+#backendNote {
+  font-size: var(--font-size-xs).
+  color: var(--color-success).
+  text-align: center.
+}
+
+button {
+  transition: background var(--transition-fast) var(--spring-smooth),
+              border-color var(--transition-fast) var(--spring-smooth),
+              color var(--transition-fast) var(--spring-smooth),
+              transform var(--transition-fast) var(--spring-gentle),
+              box-shadow var(--transition-fast) var(--spring-smooth).
+}
+
+button:hover:not(:disabled) {
+  transform: translateY(-1px).
+  box-shadow: var(--shadow-sm).
+}
+
+button:active:not(:disabled) {
+  transform: scale(0.98).
+}
+
+button:focus-visible {
+  outline: 3px solid var(--color-primary).
+  outline-offset: 2px.
+}
+
+.card {
+  transition: box-shadow var(--transition-normal) var(--spring-smooth),
+              transform var(--transition-normal) var(--spring-smooth).
+}
+
+.card:hover {
+  box-shadow: var(--shadow-md).
+  transform: translateY(-1px).
+}
+
+@media (max-width: 560px) {
+  .challengeRow {
+    flex-direction: column.
+    gap: var(--space-md).
+  }
+  .challengeRow > div {
+    width: 100%.
+  }
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  20%, 60% { transform: translateX(-8px); }
+  40%, 80% { transform: translateX(8px); }
+}
+
+#result.no.shake {
+  animation: shake var(--transition-normal) var(--spring-gentle).
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #result, #result.show, #videoWrap:not([hidden]), #adminDrawer[open] .admin-backdrop, #adminDrawer[open] .admin-panel {
+    animation: none !important.
+  }
+  button, .card, .nonce, #challengeQR, #videoWrap {
+    transition: none !important.
+  }
+  #resultIcon { animation: none !important. }
+  #result.no.shake { animation: none !important. }
+}

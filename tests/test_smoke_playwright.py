@@ -164,7 +164,7 @@ def test_shop_paste_flow_and_offline(servers):
 
     ts = int(_time.time())
     msg = canonical(["yn-proof-v1", sha256_hex(canonical(signed_body(cred))),
-                     ch["n"], "SHOP-A", ts])
+                     ch["n"], "SHOP-A", ts, cred.get("did", "")])
     r, s = decode_dss_signature(key.sign(msg, ec.ECDSA(SHA256())))
     presentation = json.dumps({"c": cred, "p": {
         "n": ch["n"], "ts": ts,

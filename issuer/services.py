@@ -111,12 +111,18 @@ def issue_credential(*, user: dict | None, verifier_id: str,
     except Exception as exc:
         raise ValueError(f"bad holder key: {exc}") from exc
     iat = int(now)
+    # device_id: deterministic fingerprint of the holder's key for this shop.
+    # Prevents casual credential sharing between devices.
+    did = hashlib.sha256(
+        f"{holder_pub_b64u}|{verifier_id}".encode()
+    ).hexdigest()[:32]
     payload: dict[str, Any] = {
         "v": 1, "iss": issuer_id,
         "sub": pseudonym(user["master_secret"], verifier_id),
         "vid": verifier_id, "a": "over_18",
         "r": 1 if is_adult(user["dob"]) else 0,
         "iat": iat, "exp": iat + ttl_sec, "cnf": holder_pub_b64u,
+        "did": did,
     }
     want = set(CRED_REQUIRED_FIELDS) - {"s"}
     if set(signed_body(payload)) != want:

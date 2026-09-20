@@ -71,8 +71,15 @@ routes in `issuer/app.py` + `verifier/app.py`.
 - **Bearer credentials within the window:** whoever holds a live `{c,p}` pair
   *is* the holder for ~60 s (`PROOF_TS_WINDOW_SEC` + single-use nonce). Theft of
   an unlocked showing phone is accepted risk.
+- **Device binding (``did`` field):** each credential includes a `did` (SHA-256
+  fingerprint of `holder_pub|verifier_id`) signed into the credential. The proof
+  message includes the `did` for auditability. This prevents casual credential
+  sharing between devices but does NOT bind to hardware — a copied private key
+  still works. Full WebAuthn/FIDO2 attestation (biometric + hardware binding)
+  is the production target but out of scope for this prototype.
 - **No biometric binding** of holder to person (out of scope) — `cnf` binds a
-  device key, not a face.
+  device key, not a face. The `did` field adds device-level auditability but
+  not hardware attestation.
 - **Issuer-side visibility:** enrollment shows the issuer the user + shop + time
   (`POST /enroll {code, verifier_id, holder_pub}`); unlinkability against the
   issuer is NOT provided. No anonymous/static issuance mode exists.
@@ -82,6 +89,10 @@ routes in `issuer/app.py` + `verifier/app.py`.
 - **OTP weaker by design:** the shop holds the OTP secrets and can mint valid
   codes; assurance rests on operator honesty + `(sub, step)` single-use + bundle
   status checks. It exists for basic phones, not as an equivalent factor.
+  **Trust comparison:** QR mode trusts only the holder device (private key).
+  OTP mode trusts the shop operator (they hold the HMAC secret). Use OTP only
+  when QR scanning is impossible (feature phones, poor camera, accessibility).
+  See `docs/protocol.md` section 8 for a full comparison table.
 - **Ephemeral targets:** server-side nonce / reuse / receipt state lives in
   SQLite/kv files; serverless `/tmp` and diskless containers reset it (re-pair
   after). Receipt HMAC proves tampering to outsiders, not to someone holding

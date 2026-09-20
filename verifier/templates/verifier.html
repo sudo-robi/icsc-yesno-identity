@@ -18,7 +18,7 @@
   <span class="badge" id="trustBadge">Trust: ?</span>
 </div>
 
-<div id="result" role="status" aria-live="assertive">
+<div id="result" role="status" aria-live="assertive" aria-atomic="true">
   <div id="resultIcon" aria-hidden="true"></div>
   <div id="resultWord"></div>
   <div id="resultWhy"></div>
@@ -39,7 +39,7 @@
   <div class="row"><button id="scanBtn">Start camera</button></div>
   <div id="noCamMsg" class="muted" hidden></div>
   <label>Paste presentation JSON instead
-    <textarea id="credInput" placeholder='{"c":{…},"p":{…}}' spellcheck="false"></textarea>
+    <textarea id="credInput" placeholder='{"c":{…},"p":{…}}' spellcheck="false" aria-label="Pasted presentation JSON"></textarea>
   </label>
   <div class="row"><button class="primary" id="verifyBtn">Check ID</button></div>
 </section>
@@ -58,23 +58,26 @@
 <section class="card" aria-label="Recent checks">
   <h2>Recent checks <span class="muted">(no personal data kept)</span></h2>
   <table><thead><tr><th>Time</th><th>Result</th><th>Mode</th></tr></thead>
-  <tbody id="recentBody"><tr><td colspan="3" class="muted">None yet.</td></tr></tbody></table>
+  <tbody id="recentBody"><tr><td colspan="3" class="muted">No checks yet.</td></tr></tbody></table>
 </section>
 
 <details class="card" id="adminDrawer">
   <summary>Shop admin (receipts + pairing)</summary>
-  <label>Admin token (kept in memory only)
-    <input id="adminToken" type="password" autocomplete="off" class="wide">
-  </label>
-  <div class="row">
-    <button id="receiptsBtn">View receipts</button>
-    <button id="csvBtn">Export CSV</button>
+  <div class="admin-backdrop" tabindex="-1" aria-hidden="true"></div>
+  <div class="admin-panel">
+    <label>Admin token (kept in memory only)
+      <input id="adminToken" type="password" autocomplete="off" class="wide" aria-label="Admin token">
+    </label>
+    <div class="row">
+      <button id="receiptsBtn">View receipts</button>
+      <button id="csvBtn">Export CSV</button>
+    </div>
+    <div id="adminReceipts"></div>
+    <label>Pair with a signed bundle (paste JSON)
+      <textarea id="bundleInput" placeholder='{"v":…,"s":…}' spellcheck="false" aria-label="Bundle JSON"></textarea>
+    </label>
+    <div class="row"><button id="syncBtn">Sync bundle</button></div>
   </div>
-  <div id="adminReceipts"></div>
-  <label>Pair with a signed bundle (paste JSON)
-    <textarea id="bundleInput" placeholder='{"v":…,"s":…}' spellcheck="false"></textarea>
-  </label>
-  <div class="row"><button id="syncBtn">Sync bundle</button></div>
 </details>
 
 <p class="muted"><a href="/receipts.csv">CSV</a> · <a href="/healthz">Health</a> · <a href="/status">Status</a></p>

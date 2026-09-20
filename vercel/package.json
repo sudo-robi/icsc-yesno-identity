@@ -1,0 +1,34 @@
+{
+  "name": "yn-vercel",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vercel dev",
+    "build": "tsc --noEmit",
+    "lint": "eslint . --ext .ts",
+    "db:migrate": "node scripts/migrate.js",
+    "db:seed": "node scripts/seed.js"
+  },
+  "dependencies": {
+    "@vercel/kv": "^1.0.1",
+    "@vercel/postgres": "^0.7.2",
+    "ably": "^1.2.0",
+    "@noble/ed25519": "^2.1.0",
+    "@noble/hashes": "^1.4.0",
+    "@noble/curves": "^1.4.0",
+    "zod": "^3.22.4",
+    "jose": "^5.2.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.3",
+    "@types/node": "^20.10.6",
+    "vercel": "^33.0.1",
+    "eslint": "^8.56.0",
+    "@typescript-eslint/eslint-plugin": "^6.17.0",
+    "@typescript-eslint/parser": "^6.17.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

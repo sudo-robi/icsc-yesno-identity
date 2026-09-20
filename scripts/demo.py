@@ -60,7 +60,7 @@ def proof_for(key, cred, nonce, vid="SHOP-A"):
 
     ts = int(time.time())
     msg = canonical(["yn-proof-v1", sha256_hex(canonical(signed_body(cred))),
-                     nonce, vid, ts])
+                     nonce, vid, ts, cred.get("did", "")])
     r, s = decode_dss_signature(key.sign(msg, ec.ECDSA(SHA256())))
     return {"n": nonce, "ts": ts,
             "sig": b64u_encode(r.to_bytes(32, "big") + s.to_bytes(32, "big"))}

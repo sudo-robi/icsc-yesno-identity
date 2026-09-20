@@ -146,7 +146,21 @@ def verify_code():
     result, reason = services.otp_status(matched, _trust() or {})
     receipt = _receipt("over_18:otp", result, reason)
     log_event(log, "verify_code", result=result, reason=reason)
-    return {"result": result, "reason": reason, "receipt": receipt}
+    return {"result": result, "reason": reason, "receipt": receipt,
+            "mode": "otp",
+            "trust_note": "OTP mode: shop operator holds secrets; "
+                           "QR mode (P-256) is stronger"}
+
+
+@app.post("/admin/trigger-sync")
+@admin_required
+def trigger_sync():
+    """Manually enqueue a bundle sync (async, via sync queue)."""
+    if not _sync_queue:
+        return err("MALFORMED", "SSE/sync not configured (set ISSUER_URL)"), 400
+    enqueued = _sync_queue.enqueue()
+    return {"ok": True, "enqueued": enqueued,
+            "pending": _sync_queue.pending}
 
 
 @app.post("/sync")
@@ -261,6 +275,66 @@ def index():
 
 
 repo.init_db(DB)
+
+
+# --- SSE auto-sync: subscribe to issuer revocation/rotation events ---
+# --- SSE auto-sync: subscribe to issuer revocation/rotation events ---
+# Uses the async sync queue for deduplication, retry, and rate limiting.
+def _validate_and_save_bundle(bundle: dict) -> bool:
+    """Check + save a fetched bundle. Returns True if accepted."""
+    pinned = _trust()
+    accepted, reason = services.check_bundle(bundle, pinned=pinned,
+                                             now=time.time())
+    if accepted:
+        repo.save_bundle(DB, bundle)
+        log_event(log, "bundle_synced", v=bundle.get("v"))
+        return True
+    else:
+        log_event(log, "bundle_rejected", reason=reason or "unknown")
+        return False
+
+
+_sse_client = None
+_sync_queue = None
+if config.ISSUER_URL:
+    from verifier.sse_client import IssuerSSEClient
+    from verifier.sync_queue import SyncQueue
+
+    def _on_sync_ok(bundle):
+        _validate_and_save_bundle(bundle)
+
+    def _on_sync_fail(reason):
+        log_event(log, "sync_queue_failed", reason=reason[:200])
+
+    _sync_queue = SyncQueue(
+        issuer_url=config.ISSUER_URL, verifier_id=VERIFIER_ID,
+        admin_token=config.ADMIN_TOKEN,
+        on_sync_ok=_on_sync_ok, on_sync_fail=_on_sync_fail)
+    _sync_queue.start()
+
+    def _sse_on_update():
+        """SSE callback enqueues a sync request (deduplicated by queue)."""
+        if _sync_queue:
+            _sync_queue.enqueue()
+
+    _sse_client = IssuerSSEClient(
+        issuer_url=config.ISSUER_URL, verifier_id=VERIFIER_ID,
+        admin_token=config.ADMIN_TOKEN, on_bundle_update=_sse_on_update)
+    _sse_client.start()
+
+
+@app.get("/sse-status")
+def sse_status():
+    """Check SSE + sync queue connection status."""
+    return {
+        "sse_enabled": bool(config.ISSUER_URL),
+        "issuer_url": config.ISSUER_URL or None,
+        "sse_connected": (_sse_client is not None
+                          and _sse_client._thread is not None
+                          and _sse_client._thread.is_alive()),
+        "sync_queue_pending": _sync_queue.pending if _sync_queue else 0,
+        "sync_queue_last_sync": _sync_queue.last_sync_ts if _sync_queue else 0,
+    }
 
 
 if __name__ == "__main__":  # pragma: no cover - dev entrypoint

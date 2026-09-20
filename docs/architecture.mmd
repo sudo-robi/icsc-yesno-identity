@@ -16,12 +16,14 @@ subgraph group_issuance["Credential Issuance"]
   node_issuer_records[("Users + Codes + Keys<br/>[issuer/repo.py]")]
 end
 
-subgraph group_verification["Offline Verification"]
+subgraph group_verification["Offline Verification + Real-time Sync"]
   node_challenge["Challenge QR {n,vid,exp}<br/>[verifier/app.py challenge]"]
   node_verifier_api["Verifier Routes<br/>[verifier/app.py]"]
   node_decision_engine["Decision Engine decide()<br/>[verifier/services.py]"]
   node_nonce_store[("Nonces atomic single-use<br/>[verifier/repo.py]")]
   node_trust_bundle[("Pinned Trust Bundle<br/>[verifier/repo.py]")]
+  node_sse_client["SSE Client<br/>[verifier/sse_client.py]"]
+  node_sync_queue["Async Sync Queue<br/>[verifier/sync_queue.py]"]
 end
 
 subgraph group_audit["Audit+Fallback"]
@@ -52,6 +54,12 @@ node_issuer_svc -->|"returns credential + otp_secret"| node_holder_ui
 node_issuer_svc -->|"build_bundle() signed"| node_operator
 node_operator -->|"POST /sync + admin token"| node_verifier_api
 node_verifier_api -->|"check_bundle() TOFU then pin"| node_trust_bundle
+
+%% Real-time revocation push (SSE)
+node_issuer_api -->|"GET /events (SSE)"| node_sse_client
+node_sse_client -->|"enqueues sync"| node_sync_queue
+node_sync_queue -->|"fetches bundle"| node_issuer_api
+node_sync_queue -->|"validates + saves"| node_trust_bundle
 
 %% Verification flow - numbered, fully offline
 node_verifier_api -->|"1. shows challenge {n,vid,exp}"| node_challenge

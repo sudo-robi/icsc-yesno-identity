@@ -29,9 +29,16 @@ def mint_challenge(*, verifier_id: str, now: float, ttl_sec: int) -> dict:
     return {"n": secrets.token_hex(16), "vid": verifier_id, "exp": issued + ttl_sec}
 
 
-def proof_message(*, cred_canonical_sha: str, nonce: str, vid: str, ts: int) -> bytes:
-    """Exact bytes the holder signs: canonical list per docs/protocol.md."""
-    return canonical(["yn-proof-v1", cred_canonical_sha, nonce, vid, ts])
+def proof_message(*, cred_canonical_sha: str, nonce: str, vid: str, ts: int,
+                  did: str = "") -> bytes:
+    """Exact bytes the holder signs: canonical list per docs/protocol.md.
+
+    The ``did`` (device ID) is included when present so the proof is bound to
+    the specific device that received the credential. A proof replayed from a
+    different device will have a different ``cnf`` key and fail P-256 verify;
+    the ``did`` in the signed message adds an extra layer of auditability.
+    """
+    return canonical(["yn-proof-v1", cred_canonical_sha, nonce, vid, ts, did])
 
 
 def decide(cred: dict, proof: dict | None, raw_len: int, *, trust: dict | None,
@@ -80,8 +87,10 @@ def decide(cred: dict, proof: dict | None, raw_len: int, *, trust: dict | None,
         return "NO", "BAD_PROOF"
     # vid binding lives in the signed message (recomputed with OUR vid), so a
     # proof minted for another shop cannot verify here.
+    # did (device ID) is included when present for auditability.
     msg = proof_message(cred_canonical_sha=sha256_hex(canonical(body)),
-                        nonce=proof["n"], vid=verifier_id, ts=proof["ts"])
+                        nonce=proof["n"], vid=verifier_id, ts=proof["ts"],
+                        did=cred.get("did", ""))
     if not p256_verify(cred["cnf"], proof["sig"], msg):
         return "NO", "BAD_PROOF"
     if cred["sub"] in (trust.get("revoked") or []):
@@ -133,7 +142,12 @@ def match_otp_code(secrets: dict, code: str, verifier_id: str, step: int,
 
 
 def otp_status(sub: str, trust: dict) -> tuple[str, str]:
-    """Enforce holder status for an OTP-identified pseudonym."""
+    """Enforce holder status for an OTP-identified pseudonym.
+
+    OTP mode trusts the shop operator (they hold the secrets and can mint
+    valid codes). This is weaker than QR mode where only the holder's
+    private key can produce a valid proof.
+    """
     if sub in (trust.get("revoked") or []):
         return "NO", "REVOKED"
     if sub in (trust.get("minors") or []):
