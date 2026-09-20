@@ -23,6 +23,17 @@ playwright = pytest.importorskip("playwright.sync_api")
 ADMIN_HDR = {"Authorization": "Bearer admin-secret"}
 
 
+def _launch(pw):
+    """Launch Chromium: playwright-bundled build first, system Chrome fallback
+    (dev machines often have google-chrome but no `playwright install` cache)."""
+    try:
+        return pw.chromium.launch()
+    except Exception as exc:
+        if "Executable doesn't exist" not in str(exc):
+            raise
+        return pw.chromium.launch(channel="chrome")
+
+
 def _free_port():
     sock = socket.socket()
     sock.bind(("127.0.0.1", 0))
@@ -95,7 +106,7 @@ def test_holder_enroll_and_offline(servers):
     code = _api_post(base, "/admin/users/U001/enrollment-code", {},
                      ADMIN_HDR)["code"]
     with sync_playwright() as pw:
-        browser = pw.chromium.launch()
+        browser = _launch(pw)
         page = browser.new_page()
         page.goto(base + "/holder/", wait_until="networkidle")
         page.click("text=Demo settings")
@@ -117,7 +128,7 @@ def test_shop_camera_denied_graceful(servers):
 
     _ibase, vbase = servers["issuer"], servers["verifier"]
     with sync_playwright() as pw:
-        browser = pw.chromium.launch()
+        browser = _launch(pw)
         context = browser.new_context(permissions=[])
         page = context.new_page()
         page.goto(vbase + "/", wait_until="domcontentloaded")
@@ -160,7 +171,7 @@ def test_shop_paste_flow_and_offline(servers):
         "n": ch["n"], "ts": ts,
         "sig": b64u_encode(r.to_bytes(32, "big") + s.to_bytes(32, "big"))}})
     with sync_playwright() as pw:
-        browser = pw.chromium.launch()
+        browser = _launch(pw)
         page = browser.new_page()
         page.goto(vbase + "/", wait_until="domcontentloaded")
         assert "Shop check" in page.inner_text("h1")

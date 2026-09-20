@@ -31,12 +31,12 @@
   <div id="videoWrap" hidden>
     <video id="video" playsinline muted aria-label="Camera viewfinder"></video>
     <div class="row">
-      <button id="scanBtn">Start camera</button>
       <button id="torchBtn" hidden>Torch: off</button>
       <button id="switchBtn" hidden>Switch camera</button>
     </div>
     <p class="muted" id="backendNote"></p>
   </div>
+  <div class="row"><button id="scanBtn">Start camera</button></div>
   <div id="noCamMsg" class="muted" hidden></div>
   <label>Paste presentation JSON instead
     <textarea id="credInput" placeholder='{"c":{…},"p":{…}}' spellcheck="false"></textarea>
