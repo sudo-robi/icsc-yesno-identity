@@ -106,6 +106,3 @@ real obligations. A yes/no check lets a shop *avoid holding personal data at all
 NIMC already holds NIN records, so it is the natural issuer; banks/telcos join as
 second issuers to cut SIM-fraud. Shops adopt because a 1-tap offline check is faster
 than a photocopy drawer and carries no PII-storage risk.
-
-## Build notes
-How this was built (agents, skills, TDD workflow): see [AGENTS.md](AGENTS.md).

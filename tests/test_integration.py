@@ -42,6 +42,33 @@ def test_e2e_adult_yes_and_minor_no(tmp_path):
         assert v.get_json()["result"] == expect, v.get_json()
 
 
+def test_full_flow_http_api(tmp_path, monkeypatch):
+    """The whole story over HTTP: pair -> issue -> challenge -> nonce-bound
+    issue -> YES -> reuse spent -> revoke -> sync -> REVOKED."""
+    monkeypatch.setenv("ISSUER_ADMIN_TOKEN", "admin-secret")
+    _setup(str(tmp_path))
+    ic = issuer_app.app.test_client()
+    vc = verifier_app.app.test_client()
+    hdr = {"X-Admin-Token": "admin-secret"}
+
+    bundle = _pair(ic, vc)  # pair
+    assert bundle["v"] >= 1
+    static = ic.post("/issue", json={"user_id": "U001",
+                                     "verifier_id": "SHOP-A"}).get_json()
+    assert vc.post("/verify", json={"cred": static, "nonce": ""}).get_json()["result"] == "YES"
+    nonce = vc.get("/challenge").get_json()["nonce"]  # challenge
+    live = ic.post("/issue", json={"user_id": "U001", "verifier_id": "SHOP-A",
+                                   "nonce": nonce}).get_json()  # nonce-bound issue
+    first = vc.post("/verify", json={"cred": live, "nonce": nonce}).get_json()
+    assert first["result"] == "YES" and first["mode"] == "challenge"
+    again = vc.post("/verify", json={"cred": live, "nonce": nonce}).get_json()
+    assert again["reason"] in ("REPLAY", "UNKNOWN_CHALLENGE")  # reuse spent
+    assert ic.post("/revoke", json={"user_id": "U001"}, headers=hdr).status_code == 200
+    _pair(ic, vc)  # sync
+    final = vc.post("/verify", json={"cred": static, "nonce": ""}).get_json()
+    assert final["reason"] == "REVOKED"
+
+
 def test_revocation_through_documented_flow(tmp_path, monkeypatch):
     """Revoke on the issuer, re-pair, and the SAME credential now fails —
     end to end through /bundle -> /sync, no hand-written bundles."""
