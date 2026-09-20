@@ -61,7 +61,24 @@ and the key can rewrite history — the chain proves tampering to outsiders,
 nothing more. OTP/nonce material is stored peppered so public receipts can't
 be brute-forced back into codes.
 
-## Honest limits
+## Threat model and known limits
+Assumed attacker: can copy QRs, craft unsigned claims, replay traffic, and reach
+any public endpoint — but has no issuer key and cannot break Ed25519/SHA-256/HMAC.
+- **Bearer credentials.** The holder has no key: a credential (or OTP code) is a
+  bearer token — whoever holds it, is it. Nonce binding proves *freshness for a
+  shop at a time*, not presenter identity. Theft of a live credential within its
+  window is accepted risk (bounded by 5-min expiry + single-use challenges).
+- **Issuer visibility.** Challenge mode shows the issuer the user + shop + time per
+  check and needs the holder online. Static mode keeps the holder fully offline
+  (and the issuer blind) at the cost of the 5-min replay window.
+- **Receipts are chained, not anchored.** HMAC-chained (`0600` key file) with
+  serialized appends; anyone holding *both* DB and key can rewrite history. The
+  chain proves tampering to key-less auditors — nothing more. OTP material is
+  stored peppered, and OTP receipts carry random tokens, so public receipts can't
+  be brute-forced back into codes.
+- **Ephemeral targets.** Vercel `/tmp` resets on cold starts (re-pair takes 10s;
+  challenges can't cross instances). Render free tier has no disk — same story
+  after redeploys; the blueprint's commented disk block + paid instance fixes it.
 - Revocation has a delay window by design (bounded by the 300s credential expiry).
   Revocation is real end to end: the issuer publishes per-verifier pseudonyms in a
   signed `/bundle`, the verifier pins the key and rejects rollbacks.
@@ -70,21 +87,17 @@ be brute-forced back into codes.
   trustbundle. The verifier holding the secret is demo-only; production would use
   per-user TOTP provisioning.
 - Pairing (`POST /verifier/sync`) is open by default for demos — set `PAIRING_TOKEN`
-  to lock it (body field `pairing_token` or `X-Pairing-Token` header), else anyone
-  reaching the verifier could swap its trusted keys. Same for issuer ops
-  (`/revoke`, `/rotate`) via `ISSUER_ADMIN_TOKEN`.
+  to lock it (body field `pairing_token` or `X-Pairing-Token` header, constant-time
+  compared), else anyone reaching the verifier could swap its trusted keys. Same for
+  issuer ops (`/revoke`, `/rotate`) via `ISSUER_ADMIN_TOKEN`.
 - Enrollment is an explicit prototype boundary: `/issue` and `/otp` hand a signed
-  credential to anyone presenting a user ID, so nonce binding proves *freshness for
-  a shop at a time* — not presenter identity. Real deployment needs identity
+  credential to anyone presenting a user ID. Real deployment needs identity
   proofing at enrollment.
-- Privacy trade-off: challenge mode shows the issuer the user + shop + time per
-  check and needs the holder online. Static mode keeps the holder fully offline
-  (and the issuer blind) at the cost of the 5-min replay window.
 - Same-shop repeat visits are linkable (attributable receipts); cross-shop visits
   can't be joined (pairwise pseudonyms). Per-visit pseudonyms are future work.
 - Single worker (`--workers 1`): the challenge registry and SQLite live in-process.
-  Render free tier has no disk, so redeploys reset state like serverless — the paid
-  disk block in the blueprint fixes that when you outgrow demo tier.
+  Rate limits are in-memory by default (`RATELIMIT_STORAGE_URI` accepts a
+  Redis URI); behind a proxy set `BEHIND_PROXY=1` so limits see the real client IP.
 
 ## Adoption (hypothesis, not a legal opinion)
 Shops that photocopy IDs become data controllers holding personal data — under

@@ -120,6 +120,16 @@ def test_sync_shape_errors(tmp_path):
     assert vc.post("/sync", json={**base, "pubkey_hex": 123}).status_code == 400
 
 
+def test_token_compare_rejects_non_strings():
+    from issuer.service import admin_ok
+    from verifier.service import pairing_ok
+    assert admin_ok("shop-secret", "shop-secret") is True
+    assert pairing_ok("shop-secret", "shop-secret") is True
+    for bad in (None, 123, ["shop-secret"], {"t": 1}, "SHOP-SECRET"):
+        assert admin_ok(bad, "shop-secret") is False
+        assert pairing_ok(bad, "shop-secret") is False
+
+
 def test_holder_page(tmp_path):
     _vdb(str(tmp_path))
     assert V.app.test_client().get("/holder/").status_code == 200
