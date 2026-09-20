@@ -8,7 +8,7 @@ import hashlib
 import hmac
 import logging
 import secrets
-from typing import Any
+
 
 from shared import config
 from shared.canonical import canonical

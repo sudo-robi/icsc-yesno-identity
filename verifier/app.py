@@ -96,7 +96,7 @@ def verify():
     """Verify a {credential, proof} presentation. Always YES/NO + reason."""
     try:
         args = VerifySchema().load(request.get_json(force=True))
-    except ValidationError as e:
+    except ValidationError:
         return {"result": "NO", "reason": "MALFORMED"}, 400
     except Exception:
         return {"result": "NO", "reason": "MALFORMED"}, 400
