@@ -36,10 +36,6 @@ class ContractDriftError(RuntimeError):
     """Built credential disagrees with shared.schemas (server bug, not input)."""
 
 
-class EnvManagedKeyError(RuntimeError):
-    """Rotation requested while the key comes from the environment."""
-
-
 def is_adult(dob_str: str, today: date | None = None) -> bool:
     """Calendar-correct 18+ check (leap-day safe). Day counts drift on leaps."""
     year, month, day = map(int, dob_str.split("-"))
@@ -88,12 +84,11 @@ def ensure_active_key(db_path: str, keydir: str) -> dict:
         assert created is not None
         return created
     priv_hex, pub_hex = ed25519_keypair()
-    with open(priv_file, "w") as f:
-        f.write(priv_hex)
+    fd = os.open(priv_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
-        os.chmod(priv_file, 0o600)
-    except OSError:
-        pass
+        os.write(fd, priv_hex.encode())
+    finally:
+        os.close(fd)
     repo.deactivate_all_keys(db_path)
     repo.store_key(db_path, priv_hex, pub_hex, active=True)
     created = repo.active_key(db_path)
@@ -162,8 +157,4 @@ def fingerprint(pub_hex: str) -> str:
     return key_fingerprint(pub_hex)
 
 
-def admin_ok(presented: object, required: str) -> bool:
-    """Constant-time operator-token comparison. Non-string never matches."""
-    if not isinstance(presented, str):
-        return False
-    return _hm.compare_digest(presented, required)
+

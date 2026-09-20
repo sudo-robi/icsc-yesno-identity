@@ -1,0 +1,50 @@
+# Fly.io configuration for yn-id (issuer + verifier)
+# 1. Install flyctl: https://fly.io/docs/hands-on/install-flyctl/
+# 2. fly auth login
+# 3. fly launch --copy-config (first time)
+# 4. fly secrets set ADMIN_TOKEN=$(openssl rand -hex 16)
+# 5. fly volume create issuer_data --region sjc (or nearest)
+# 6. fly volume create verifier_data --region sjc
+# 7. fly deploy
+#
+# After first boot, pair the shop:
+#   curl -sf https://yn-issuer.fly.dev/bundle?vid=SHOP-A | \
+#     curl -sf -X POST https://yn-verifier.fly.dev/sync \
+#       -H "Content-Type: application/json" \
+#       -H "Authorization: Bearer $ADMIN_TOKEN" -d @-
+
+app = "yn-id"
+primary_region = "sjc"
+
+[build]
+  dockerfile = "deploy/Dockerfile"
+
+# --- Issuer service ---
+# fly deploy creates one app; we run both services via a supervisor entrypoint.
+# For separate apps, duplicate this fly.toml and split the CMD.
+
+[env]
+  ISSUER_DB = "/data/issuer.db"
+  VERIFIER_DB = "/data/receipts.db"
+  OTP_SECRETS_PATH = "/data/otp_secrets.json"
+  ISSUER_KEYDIR = "/data/keys"
+  BEHIND_PROXY = "1"
+
+[[services]]
+  internal_port = 5001
+  protocol = "tcp"
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[services.ports]]
+    handlers = ["http", "tls"]
+    port = 443
+
+  [[services.ports]]
+    handlers = ["redirect"]
+    port = 80
+
+[[mounts]]
+  source = "issuer_data"
+  destination = "/data"

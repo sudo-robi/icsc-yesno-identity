@@ -1,5 +1,13 @@
 # Render blueprint WITH a persistent disk (paid instance required for disks).
 # Free tier has no disk: SQLite/keys/receipts reset on redeploy (re-pair after).
+# 1. Push to GitHub
+# 2. Render → New → Blueprint → select this repo
+# 3. Set ADMIN_TOKEN in the Render dashboard (Environment tab)
+# 4. After both services boot, pair the shop:
+#    curl -sf https://yn-issuer.onrender.com/bundle?vid=SHOP-A | \
+#      curl -sf -X POST https://yn-verifier.onrender.com/sync \
+#        -H "Content-Type: application/json" \
+#        -H "Authorization: Bearer $ADMIN_TOKEN" -d @-
 services:
   - type: web
     name: yn-issuer
@@ -15,6 +23,8 @@ services:
         value: /data/issuer.db
       - key: ISSUER_KEYDIR
         value: /data/keys
+      - key: OTP_SECRETS_PATH
+        value: /data/otp_secrets.json
       - key: ADMIN_TOKEN
         sync: false
       - key: BEHIND_PROXY
@@ -31,12 +41,8 @@ services:
     envVars:
       - key: VERIFIER_DB
         value: /data/receipts.db
-      - key: TRUSTBUNDLE_PATH
-        value: /data/trustbundle.json
       - key: OTP_SECRETS_PATH
         value: /data/otp_secrets.json
-      - key: RECEIPT_KEY_DIR
-        value: /data/keys
       - key: ADMIN_TOKEN
         sync: false
       - key: BEHIND_PROXY

@@ -49,7 +49,6 @@ def servers(tmp_path_factory):
     issuer_app.DB = os.path.join(tmp, "i.db")
     issuer_app.KEYDIR = os.path.join(tmp, "keys")
     verifier_app.DB = os.path.join(tmp, "v.db")
-    verifier_app.TRUST = os.path.join(tmp, "trust.json")
     verifier_app.SECRETS_PATH = os.path.join(tmp, "secrets.json")
     issuer_repo.init_db(issuer_app.DB)
     issuer_repo.seed_users(issuer_app.DB)

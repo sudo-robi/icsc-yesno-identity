@@ -1,0 +1,44 @@
+# Fly.io configuration for the verifier service (separate app)
+# Use when running issuer and verifier as two Fly apps.
+# 1. fly launch --name yn-verifier --copy-config
+# 2. fly secrets set ADMIN_TOKEN=<same token as issuer>
+# 3. fly volume create verifier_data --region sjc
+# 4. fly deploy -c deploy/fly-verifier.toml
+#
+# Then pair:
+#   BUNDLE=$(curl -sf https://yn-issuer.fly.dev/bundle?vid=SHOP-A)
+#   curl -sf -X POST https://yn-verifier.fly.dev/sync \
+#     -H "Content-Type: application/json" \
+#     -H "Authorization: Bearer $ADMIN_TOKEN" -d "$BUNDLE"
+
+app = "yn-verifier"
+primary_region = "sjc"
+
+[build]
+  dockerfile = "deploy/Dockerfile"
+
+[env]
+  APP = "verifier"
+  PORT = "5002"
+  VERIFIER_DB = "/data/receipts.db"
+  OTP_SECRETS_PATH = "/data/otp_secrets.json"
+  BEHIND_PROXY = "1"
+
+[[services]]
+  internal_port = 5002
+  protocol = "tcp"
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[services.ports]]
+    handlers = ["http", "tls"]
+    port = 443
+
+  [[services.ports]]
+    handlers = ["redirect"]
+    port = 80
+
+[[mounts]]
+  source = "verifier_data"
+  destination = "/data"

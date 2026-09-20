@@ -21,8 +21,6 @@ log = base_logger("issuer")
 
 require_admin_configured()
 
-require_admin_configured()
-
 BASE = os.path.dirname(os.path.abspath(__file__))
 DB = config.ISSUER_DB
 KEYDIR = config.ISSUER_KEYDIR
@@ -108,10 +106,8 @@ def enroll():
             verifier_id=args["verifier_id"], holder_pub_b64u=args["holder_pub"],
             issuer_id=ISSUER_ID, priv_hex=_active_key()["priv"],
             now=time.time(), ttl_sec=config.CRED_TTL_SEC)
-    except services.UnknownUserError:
-        return err("UNKNOWN_CODE"), 400
-    except services.RevokedError:
-        return err("REVOKED_USER"), 403
+    except (services.UnknownUserError, services.RevokedError):
+        return err("ENROLL_FAILED"), 400
     except ValueError:
         return err("BAD_PUBKEY"), 400
     except services.ContractDriftError as e:
@@ -121,7 +117,8 @@ def enroll():
     response: dict = {"credential": payload}
     if config.OTP_ENABLED:
         user = repo.get_user(DB, redeemed["user_id"])
-        assert user is not None
+        if user is None:
+            return err("MALFORMED", "issuer error"), 500
         response["otp_secret"] = services.otp_secret_for(
             user["master_secret"], args["verifier_id"])
     return jsonify(response)

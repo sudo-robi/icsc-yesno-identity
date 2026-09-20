@@ -42,18 +42,56 @@ YES, NO(minor), BADSIG, replay blocked, forged-bundle rejected, revoked after sy
 2. Holder PWA → enroll with the code → credential card appears.
 3. Shop → New challenge → holder scans it → holder shows ID QR → shop scans → **YES**.
 4. Screenshot the holder QR, replay it → **blocked** (challenge consumed).
-5. Forge a credential by hand → **BADSIG**. Airplane mode on both → still works.
+5. Forge a credential by hand → **MALFORMED** (shape check) or **BADSIG** (tampered sig).
+   Airplane mode on both → still works.
 6. Admin revokes U001 → old bundle still passes (delay window) → re-sync bundle → **REVOKED**.
 
 ## Deploy
-- **Render** (recommended): `deploy/render.blueprint.yaml` — services with a
-  **persistent disk** (paid instance required for disks; free tier resets state).
-- **Docker**: `docker compose -f deploy/compose.yml up --build` (needs `ADMIN_TOKEN`).
-- **Vercel/serverless: unsuitable for the verifier** — `/tmp` resets wipe the nonce
-  registry, receipts and pairing. Stateless issuer-only hosting is possible but pointless
-  for the demo; not supported.
-- **Camera note**: QR scanning needs HTTPS or localhost (`getUserMedia` rule).
-  Plain-HTTP LAN IPs get the paste-JSON fallback; the README demo uses paste or localhost.
+
+### Render (recommended for demo)
+1. Push to GitHub.
+2. Render → **New** → **Blueprint** → select this repo.
+3. Set `ADMIN_TOKEN` in the Render dashboard (Environment tab, both services).
+4. After both boot, pair the shop:
+   ```bash
+   ADMIN_TOKEN=... curl -sf https://yn-issuer.onrender.com/bundle?vid=SHOP-A | \
+     curl -sf -X POST https://yn-verifier.onrender.com/sync \
+       -H "Content-Type: application/json" \
+       -H "Authorization: Bearer $ADMIN_TOKEN" -d @-
+   ```
+   Free tier: state resets on redeploy (re-pair after). Paid tier: persistent disk.
+
+### Fly.io
+1. Install `flyctl` → `fly auth login`.
+2. Deploy issuer: `fly launch --name yn-issuer --copy-config -c deploy/fly-issuer.toml`
+   ```bash
+   fly secrets set ADMIN_TOKEN=$(openssl rand -hex 16) -a yn-issuer
+   fly volumes create issuer_data --region sjc -a yn-issuer
+   fly deploy -c deploy/fly-issuer.toml
+   ```
+3. Deploy verifier: `fly launch --name yn-verifier --copy-config -c deploy/fly-verifier.toml`
+   ```bash
+   fly secrets set ADMIN_TOKEN=<same token> -a yn-verifier
+   fly volumes create verifier_data --region sjc -a yn-verifier
+   fly deploy -c deploy/fly-verifier.toml
+   ```
+4. Pair the shop:
+   ```bash
+   curl -sf https://yn-issuer.fly.dev/bundle?vid=SHOP-A | \
+     curl -sf -X POST https://yn-verifier.fly.dev/sync \
+       -H "Content-Type: application/json" \
+       -H "Authorization: Bearer $ADMIN_TOKEN" -d @-
+   ```
+
+### Docker
+```bash
+ADMIN_TOKEN=$(openssl rand -hex 16) docker compose -f deploy/compose.yml up --build
+```
+
+### Notes
+- **Vercel/serverless: unsuitable** — `/tmp` resets wipe state. Not supported.
+- **Camera**: QR scanning needs HTTPS or localhost (`getUserMedia` rule).
+  Plain-HTTP LAN IPs get the paste-JSON fallback.
 
 ## Adoption (hypothesis, not a legal opinion)
 Shops that photocopy IDs become data controllers holding personal data — under

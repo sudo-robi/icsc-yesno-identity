@@ -23,13 +23,6 @@ from verifier import repo as _repo
 log = logging.getLogger("verifier.service")
 
 
-def pairing_ok(presented: Any, required: str) -> bool:
-    """Constant-time pairing-token comparison. Non-string never matches."""
-    if not isinstance(presented, str):
-        return False
-    return hmac.compare_digest(presented, required)
-
-
 def mint_challenge(*, verifier_id: str, now: float, ttl_sec: int) -> dict:
     """Fresh shop challenge for the challenge-QR: {n, vid, exp}."""
     issued = int(now)
@@ -56,6 +49,8 @@ def decide(cred: dict, proof: dict | None, raw_len: int, *, trust: dict | None,
     """
     if trust is None:
         return "NO", "NO_TRUSTBUNDLE"
+    if trust.get("exp", 0) < now:
+        return "NO", "STALE_BUNDLE"
     shape_err = validate_credential(cred)
     if shape_err:
         return "NO", shape_err

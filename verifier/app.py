@@ -97,7 +97,7 @@ def verify():
     try:
         args = VerifySchema().load(request.get_json(force=True))
     except ValidationError as e:
-        return {"result": "NO", "reason": "MALFORMED", "detail": str(e.messages)}, 400
+        return {"result": "NO", "reason": "MALFORMED"}, 400
     except Exception:
         return {"result": "NO", "reason": "MALFORMED"}, 400
     cred, proof = args["c"], args["p"]
@@ -120,7 +120,7 @@ def verify():
 
 
 @app.post("/verify_code")
-@limiter.limit(config.RATELIMIT_SENSITIVE)
+@limiter.limit(config.RATELIMIT_OTP)
 def verify_code():
     """Feature-phone OTP path (flagged). Code identifies the holder sub, then
     bundle status lists are enforced. Invalid codes are never recorded."""

@@ -57,6 +57,7 @@ def admin_required(view):
 def make_app(name: str, default_limit: str) -> tuple[Flask, Limiter]:
     """Flask app + limiter with storage URI from env. Caller adds routes."""
     app = Flask(name)
+    app.config["MAX_CONTENT_LENGTH"] = 16 * 1024  # 16 KB
     limiter = Limiter(
         get_remote_address, app=app,
         default_limits=[default_limit],
@@ -68,7 +69,9 @@ def make_app(name: str, default_limit: str) -> tuple[Flask, Limiter]:
     def _headers(resp):
         resp.headers["Content-Security-Policy"] = (
             "default-src 'self'; script-src 'self'; style-src 'self'; "
-            "img-src 'self' data:; media-src 'self' blob:; connect-src 'self'")
+            "img-src 'self' data:; media-src 'self' blob:; connect-src 'self'; "
+            "frame-ancestors 'none'")
+        resp.headers["X-Frame-Options"] = "DENY"
         resp.headers["X-Content-Type-Options"] = "nosniff"
         resp.headers["Referrer-Policy"] = "no-referrer"
         resp.headers["Permissions-Policy"] = "camera=(self)"

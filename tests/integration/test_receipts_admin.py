@@ -19,7 +19,6 @@ def _setup(monkeypatch, tmp_path):
     issuer_app.DB = os.path.join(base, "i.db")
     issuer_app.KEYDIR = os.path.join(base, "keys")
     verifier_app.DB = os.path.join(base, "v.db")
-    verifier_app.TRUST = os.path.join(base, "trust.json")
     verifier_app.SECRETS_PATH = os.path.join(base, "secrets.json")
     issuer_repo.init_db(issuer_app.DB)
     issuer_repo.seed_users(issuer_app.DB)

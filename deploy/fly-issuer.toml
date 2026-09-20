@@ -1,0 +1,41 @@
+# Fly.io configuration for the issuer service (separate app)
+# Use when running issuer and verifier as two Fly apps.
+# 1. fly launch --name yn-issuer --copy-config
+# 2. fly secrets set ADMIN_TOKEN=<any random hex>
+# 3. fly volume create issuer_data --region sjc
+# 4. fly deploy -c deploy/fly-issuer.toml
+#
+# The holder PWA is served from the issuer at /holder/.
+
+app = "yn-issuer"
+primary_region = "sjc"
+
+[build]
+  dockerfile = "deploy/Dockerfile"
+
+[env]
+  APP = "issuer"
+  PORT = "5001"
+  ISSUER_DB = "/data/issuer.db"
+  ISSUER_KEYDIR = "/data/keys"
+  OTP_SECRETS_PATH = "/data/otp_secrets.json"
+  BEHIND_PROXY = "1"
+
+[[services]]
+  internal_port = 5001
+  protocol = "tcp"
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[services.ports]]
+    handlers = ["http", "tls"]
+    port = 443
+
+  [[services.ports]]
+    handlers = ["redirect"]
+    port = 80
+
+[[mounts]]
+  source = "issuer_data"
+  destination = "/data"

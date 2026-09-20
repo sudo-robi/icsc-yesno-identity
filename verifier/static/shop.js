@@ -246,7 +246,7 @@ async function syncBundle(){
 /* ---- recent checks ---- */
 async function loadRecent(){
   try {
-    var r = await api("/receipts");
+    var r = await api("/receipts", {headers: adminHeaders()});
     if (!r.ok || !r.json.length) return;
     var tb = $("recentBody");
     while (tb.firstChild) tb.removeChild(tb.firstChild);

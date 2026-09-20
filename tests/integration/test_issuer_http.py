@@ -74,7 +74,7 @@ def test_enroll_rejects(client):
     raw = b"\x04" + b"\x11" * 64
     r = client.post("/enroll", json={"code": code, "verifier_id": "S",
                                      "holder_pub": b64u_encode(raw)})
-    assert r.status_code == 403 and r.get_json()["error"] == "REVOKED_USER"
+    assert r.status_code == 400 and r.get_json()["error"] == "ENROLL_FAILED"
 
 
 def test_enroll_code_single_use(client):
