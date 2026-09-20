@@ -41,17 +41,15 @@ def decide_decision(cred: dict, nonce: str, *, trust: dict | None,
     """Order: trust -> shape -> size -> expiry -> challenge -> sig ->
     issuer-match -> revocation -> attribute.
 
-    Challenges are single-use: a registered nonce is consumed once its binding
-    passes, so an intercepted live credential cannot be replayed inside the
-    window. Returns (YES/NO, reason)."""
+    Challenges are single-use: a registered nonce is consumed on ANY use
+    (success or failure), so an intercepted live credential cannot be replayed
+    inside the window. Returns (YES/NO, reason)."""
     if trust is None:
         return "NO", "NO_TRUSTBUNDLE"
     if malformed(cred):
         return "NO", "MALFORMED"
     if len(json.dumps(cred)) > max_bytes:
         return "NO", "TOO_LARGE"
-    if not isinstance(cred["exp"], (int, float)):
-        return "NO", "MALFORMED"
     if cred["exp"] + skew < now:
         return "NO", "EXPIRED"
     # Live-challenge binding: the nonce must be one THIS verifier issued and
@@ -61,11 +59,13 @@ def decide_decision(cred: dict, nonce: str, *, trust: dict | None,
         issued = nonces.get(nonce)
         if issued is None or now - issued > ttl:
             return "NO", "UNKNOWN_CHALLENGE"
+        del nonces[nonce]  # consume: one challenge, one attempt
         if cred.get("n") != nonce:
             return "NO", "REPLAY"
-        del nonces[nonce]  # consume: one challenge, one successful binding
     body = unsigned_body(cred)
     if not verify_sig(body, cred["s"], trust["pubkey_hex"]):
+        return "NO", "BADSIG"
+    if cred.get("iss") != trust.get("iss"):
         return "NO", "BADSIG"
     # Status lists from the signed bundle (per-verifier pseudonyms — no PII).
     # Revocation/minor status applies immediately after a sync, independent of

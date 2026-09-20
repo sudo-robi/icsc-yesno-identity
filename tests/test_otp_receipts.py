@@ -47,6 +47,38 @@ def test_otp_bad_code(tmp_path):
     assert vc.post("/verify_code", json={"code": "000000"}).get_json()["reason"] == "BAD_OTP"
 
 
+def test_invalid_code_never_marked(tmp_path):
+    """A wrong code must stay BAD_OTP on retry — only validated codes are stored."""
+    vc, _ = _setup(str(tmp_path))
+    assert vc.post("/verify_code", json={"code": "000000"}).get_json()["reason"] == "BAD_OTP"
+    assert vc.post("/verify_code", json={"code": "000000"}).get_json()["reason"] == "BAD_OTP"
+
+
+def test_otp_receipt_hides_code(tmp_path):
+    """Receipts must not contain any derivative of the raw code: two receipts
+    for the same code value must be unlinkable."""
+    vc, _ = _setup(str(tmp_path))
+    vc.post("/verify_code", json={"code": "000000"})
+    vc.post("/verify_code", json={"code": "000000"})
+    rows = vc.get("/receipts").get_json()
+    assert len(rows) == 2
+    assert rows[0]["nonce_hash"] != rows[1]["nonce_hash"]
+
+
+def test_used_codes_keyed_by_step_and_pruned(tmp_path):
+    """Same code value in a new step is fresh; entries outside the grace window go."""
+    from verifier import repo
+    _setup(str(tmp_path))
+    db = V.DB
+    repo.mark_code_used(db, "123456", 100, 1)
+    assert repo.is_code_used(db, "123456", 100) is True
+    assert repo.is_code_used(db, "123456", 101) is False
+    repo.mark_code_used(db, "123456", 101, 2)
+    repo.prune_codes(db, 101)  # keep current + previous step only
+    assert repo.is_code_used(db, "123456", 100) is False
+    assert repo.is_code_used(db, "123456", 101) is True
+
+
 def test_receipt_chain_links(tmp_path):
     vc, _ = _setup(str(tmp_path))
     vc.post("/verify_code", json={"code": "000000"})

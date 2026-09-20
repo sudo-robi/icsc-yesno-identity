@@ -116,6 +116,7 @@ def pubkey():
 
 
 @app.get("/bundle")
+@app.get("/trustbundle")  # alias: matches the documented pairing name
 def bundle():
     """Signed per-verifier trust bundle (the documented revocation channel)."""
     verifier_id = request.args.get("verifier_id", "SHOP-A")

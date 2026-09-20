@@ -24,12 +24,6 @@ def _trust(tmp, **kw):
     return tb
 
 
-def _live(nonce):
-    """Register a verifier-issued challenge, as /challenge does."""
-    V._nonces[nonce] = time.time()
-    return nonce
-
-
 def _cred(priv=PRIV, **kw):
     body = {"v": 1, "iss": "NIMC-TEST-01", "uid_p": "abcd1234efgh5678",
             "a": "over_18", "r": 1, "exp": int(time.time()) + 300}
@@ -78,11 +72,40 @@ def test_exp_wrong_type(tmp_path):
 
 def test_replay_and_live_nonce(tmp_path):
     _trust(str(tmp_path))
-    static = _cred()
-    assert V.decide(static, _live("freshnonce123"))[1] == "REPLAY"
-    live = _cred(n="freshnonce123")
-    assert V.decide(live, "freshnonce123") == ("YES", "OK")
-    assert V.decide(live, _live("othernonce"))[1] == "REPLAY"
+    V._nonces["n1"] = time.time()
+    # static QR against a live challenge: REPLAY (and the nonce is spent)
+    assert V.decide(_cred(), "n1")[1] == "REPLAY"
+    # same challenge reused, even with a properly bound credential: spent
+    assert V.decide(_cred(n="n1"), "n1")[1] == "UNKNOWN_CHALLENGE"
+    # fresh challenge + bound credential: YES, then spent
+    V._nonces["n2"] = time.time()
+    assert V.decide(_cred(n="n2"), "n2") == ("YES", "OK")
+    assert V.decide(_cred(n="n2"), "n2")[1] == "UNKNOWN_CHALLENGE"
+
+
+def test_consume_on_any_use(tmp_path):
+    """A challenge is single-use even when the first attempt fails: static QR
+    burns the nonce, so a live credential on the SAME nonce must fail."""
+    _trust(str(tmp_path))
+    V._nonces["n1"] = time.time()
+    assert V.decide(_cred(), "n1")[1] == "REPLAY"  # binding fails, nonce spent
+    assert V.decide(_cred(n="n1"), "n1")[1] == "UNKNOWN_CHALLENGE"
+
+
+def test_iss_mismatch(tmp_path):
+    """A credential signed for another issuer id must not verify."""
+    _trust(str(tmp_path))
+    assert V.decide(_cred(iss="EVIL-ISSUER"), "")[1] == "BADSIG"
+
+
+def test_strict_field_types(tmp_path):
+    _trust(str(tmp_path))
+    assert V.decide(_cred(r=2), "")[1] == "MALFORMED"
+    assert V.decide(_cred(exp=1710000300.5), "")[1] == "MALFORMED"
+    assert V.decide(_cred(exp=True), "")[1] == "MALFORMED"
+    assert V.decide(_cred(uid_p=12345), "")[1] == "MALFORMED"
+    assert V.decide(_cred(a=7), "")[1] == "MALFORMED"
+    assert V.decide(_cred(n=123), "")[1] == "MALFORMED"
 
 
 def test_unknown_and_expired_challenge(tmp_path):

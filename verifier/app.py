@@ -160,7 +160,10 @@ def verify():
 @limiter.limit(config.LIMIT_VERIFY)
 def verify_code():
     """Feature-phone path: 6-digit single-use code. Demo OTP secrets live in the
-    SEPARATE secrets store (never in the trustbundle). Codes expire per 30s step."""
+    SEPARATE secrets store (never in the trustbundle). Codes expire per 30s step;
+    replay memory is keyed by (code, step) and pruned to the grace window."""
+    import secrets as _rand
+
     data = request.get_json(force=True)
     if not isinstance(data, dict):
         return {"result": "NO", "reason": "MALFORMED"}, 400
@@ -168,17 +171,21 @@ def verify_code():
     # demo check: code must match one of the known secrets for current/prev step.
     # The match also identifies the holder pseudonym, so status (revoked/minor)
     # from the signed bundle is enforced — a bare valid code is never enough.
+    # Invalid codes are never recorded; validated codes are single-use per step.
     step = int(time.time() // config.OTP_STEP_SEC)
+    repo.prune_codes(DB, step - config.USED_CODE_STEPS_KEPT + 1)
     matched_uid = service.match_otp_code(_load_secrets(), code, VERIFIER_ID, step)
-    if repo.is_code_used(DB, code):
-        log_receipt("over_18:otp", "NO", code, "otp-reuse")
-        return {"result": "NO", "reason": "REPLAY"}
-    repo.mark_code_used(DB, code, int(time.time()))
     if matched_uid is None:
-        result, reason = "NO", "BAD_OTP"
-    else:
-        result, reason = service.otp_status(matched_uid, trust() or {})
-    eh = log_receipt("over_18:otp", result, code, "otp")
+        eh = log_receipt("over_18:otp", "NO", _rand.token_hex(16), "otp-bad")
+        return {"result": "NO", "reason": "BAD_OTP", "receipt": eh}
+    if repo.is_code_used(DB, code, step):
+        eh = log_receipt("over_18:otp", "NO", _rand.token_hex(16), "otp-reuse")
+        return {"result": "NO", "reason": "REPLAY"}
+    repo.mark_code_used(DB, code, step, int(time.time()))
+    result, reason = service.otp_status(matched_uid, trust() or {})
+    # Receipt carries a fresh random token, never any derivative of the raw code,
+    # so public receipts cannot be brute-forced back into OTP codes.
+    eh = log_receipt("over_18:otp", result, _rand.token_hex(16), "otp")
     return {"result": result, "reason": reason, "receipt": eh}
 
 

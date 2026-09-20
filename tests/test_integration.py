@@ -89,18 +89,20 @@ def test_replay_static_qr_fails_fresh_nonce(tmp_path):
     ic = issuer_app.app.test_client()
     vc = verifier_app.app.test_client()
     _pair(ic, vc)
-    nonce = vc.get("/challenge").get_json()["nonce"]
-    # attacker pastes someone else's static QR against a fresh nonce -> REPLAY
+    nonce1 = vc.get("/challenge").get_json()["nonce"]
+    # attacker pastes someone else's static QR against a fresh nonce -> REPLAY,
+    # and the challenge is spent even though the attempt failed
     static = ic.post("/issue", json={"user_id": "U001",
                                      "verifier_id": "SHOP-A"}).get_json()
-    res = vc.post("/verify", json={"cred": static, "nonce": nonce}).get_json()
+    res = vc.post("/verify", json={"cred": static, "nonce": nonce1}).get_json()
     assert res["reason"] == "REPLAY"
-    # honest holder answers the live challenge through /issue -> YES, once
+    # honest holder answers a FRESH live challenge through /issue -> YES, once
+    nonce2 = vc.get("/challenge").get_json()["nonce"]
     live = ic.post("/issue", json={"user_id": "U001", "verifier_id": "SHOP-A",
-                                   "nonce": nonce}).get_json()
-    assert vc.post("/verify", json={"cred": live, "nonce": nonce}).get_json()["result"] == "YES"
+                                   "nonce": nonce2}).get_json()
+    assert vc.post("/verify", json={"cred": live, "nonce": nonce2}).get_json()["result"] == "YES"
     # ...and the SAME live credential + nonce replayed again is consumed
-    res2 = vc.post("/verify", json={"cred": live, "nonce": nonce}).get_json()
+    res2 = vc.post("/verify", json={"cred": live, "nonce": nonce2}).get_json()
     assert res2["reason"] == "UNKNOWN_CHALLENGE"
 
 

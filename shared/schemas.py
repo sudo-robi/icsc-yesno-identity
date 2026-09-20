@@ -23,10 +23,32 @@ REASONS = frozenset({
 CRED_MAX_BYTES = 4096
 
 
+def _is_plain_int(value: object) -> bool:
+    """True for real ints only — bools are not accepted as ints."""
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
 def unsigned_body(cred: dict) -> dict:
     """The exact dict that is signed / verified. Drops "s", keeps "n" iff present."""
     return {k: cred[k] for k in CRED_SIGNED_FIELDS if k in cred}
 
 
-def malformed(cred) -> bool:
-    return not isinstance(cred, dict) or not CRED_REQUIRED_FIELDS.issubset(cred.keys())
+def malformed(cred: object) -> bool:
+    """Shape + field-type validation. Anything failing here is caller input
+    (400/MALFORMED), never a signature question. Note: ``exp`` must be an int
+    (floats/bools rejected — JSON numbers decode unambiguously for our issuers),
+    ``r`` must be exactly 0 or 1."""
+    if not isinstance(cred, dict):
+        return True
+    if not CRED_REQUIRED_FIELDS.issubset(cred.keys()):
+        return True
+    if not _is_plain_int(cred.get("exp")):
+        return True
+    for key in ("uid_p", "a", "iss"):
+        if not isinstance(cred.get(key), str):
+            return True
+    if not _is_plain_int(cred.get("r")) or cred["r"] not in (0, 1):
+        return True
+    if "n" in cred and not isinstance(cred["n"], str):
+        return True
+    return False
