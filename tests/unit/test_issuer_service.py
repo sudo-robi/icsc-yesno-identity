@@ -26,6 +26,8 @@ def test_age_boundaries():
     assert services.is_adult("2008-09-24", date(2026, 9, 20)) is False  # 4 days short
     assert services.is_adult("2008-02-29", date(2026, 2, 28)) is True  # leap baby
     assert services.is_adult("2008-02-29", date(2026, 2, 27)) is False
+    assert services.is_adult("2030-01-01", date(2026, 9, 20)) is False  # future DOB
+    assert services.is_adult("2008-02-29", date(2026, 3, 1)) is True  # day after fallback
 
 
 def test_enrollment_code_single_use(db):

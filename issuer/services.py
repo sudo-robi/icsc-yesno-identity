@@ -69,6 +69,13 @@ def ensure_active_key(db_path: str, keydir: str) -> dict:
         created = repo.active_key(db_path)
         assert created is not None
         return created
+    # DB is the source of truth once bootstrapped: an active row here means a
+    # previous boot (or an operator rotation) already decided. Re-importing the
+    # key FILE on top would silently revert rotations, so the file is only
+    # honored for a fresh database. Explicit ISSUER_PRIV_HEX above still wins.
+    existing = repo.active_key(db_path)
+    if existing:
+        return existing
     os.makedirs(keydir, exist_ok=True)
     priv_file = os.path.join(keydir, "issuer_priv.hex")
     if os.path.exists(priv_file):
@@ -76,10 +83,6 @@ def ensure_active_key(db_path: str, keydir: str) -> dict:
             file_priv = f.read().strip()
         pub = Ed25519PrivateKey.from_private_bytes(
             bytes.fromhex(file_priv)).public_key().public_bytes_raw().hex()
-        existing = repo.active_key(db_path)
-        if existing and existing["pub"] == pub:
-            return existing
-        repo.deactivate_all_keys(db_path)
         repo.store_key(db_path, file_priv, pub, active=True)
         created = repo.active_key(db_path)
         assert created is not None

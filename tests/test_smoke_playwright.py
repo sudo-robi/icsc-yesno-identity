@@ -112,6 +112,22 @@ def test_holder_enroll_and_offline(servers):
         browser.close()
 
 
+def test_shop_camera_denied_graceful(servers):
+    from playwright.sync_api import sync_playwright
+
+    _ibase, vbase = servers["issuer"], servers["verifier"]
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch()
+        context = browser.new_context(permissions=[])
+        page = context.new_page()
+        page.goto(vbase + "/", wait_until="domcontentloaded")
+        page.click("#scanBtn")
+        page.wait_for_timeout(2000)
+        msg = page.inner_text("#msg")
+        assert "paste" in msg.lower(), msg  # graceful fallback, never alert()/blank
+        browser.close()
+
+
 def test_shop_paste_flow_and_offline(servers):
     from playwright.sync_api import sync_playwright
 

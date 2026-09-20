@@ -122,7 +122,14 @@ def main() -> int:
              "next_pub": None, "revoked": [], "minors": [], "iat": 1, "exp": 9999999999}
     rogue["s"] = ed25519_sign(rogue_priv, canonical(bundle_sig_body(rogue)))
     status, body = call(VERIFIER, "POST", "/sync", rogue, HDRS)
-    check("forged bundle rejected", status == 409 and body.get("error") == "BADSIG")
+    check("forged bundle rejected", status == 409 and body.get("error") == "ISSUER_MISMATCH")
+    # same iss, rogue key, valid shape: dies on signature instead
+    _, bundle_now = call(ISSUER, "GET", "/bundle?vid=SHOP-A")
+    rogue2 = dict(bundle_now, pub=rogue_pub, v=bundle_now["v"] + 1)
+    rogue2["s"] = ed25519_sign(rogue_priv, canonical(bundle_sig_body(
+        {k: rogue2[k] for k in rogue2 if k != "s"})))
+    status, body = call(VERIFIER, "POST", "/sync", rogue2, HDRS)
+    check("rogue-key bundle rejected", status == 409 and body.get("error") == "BADSIG")
 
     # revoke -> sync -> REVOKED
     call(ISSUER, "POST", "/admin/revoke", {"user_id": "U001"}, HDRS)

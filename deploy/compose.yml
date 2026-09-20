@@ -1,8 +1,9 @@
 name: yn-id
 services:
   issuer:
-    build: ..
-    # run from the repo root: docker compose up (this file lives in deploy/)
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
     image: yn-id:latest
     environment:
       APP: issuer
@@ -16,7 +17,9 @@ services:
     volumes:
       - issuer-data:/data
   verifier:
-    build: ..
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
     image: yn-id:latest
     environment:
       APP: verifier

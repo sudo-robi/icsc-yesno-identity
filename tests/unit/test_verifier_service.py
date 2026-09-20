@@ -76,6 +76,34 @@ def test_decide_happy_path():
     assert _decide(cred, proof, _trust(pub), {"n1": 999.0}) == ("YES", "OK")
 
 
+def test_expiry_skew_edges():
+    priv, pub = ed25519_keypair()
+    key = _holder()
+    now = 100000.0
+    # Within-skew cred still needs its mandatory holder proof to reach OK;
+    # proof="" can never yield OK (validate_proof -> MALFORMED).
+    cred_ok = _cred(priv, _holder_pub(key), exp=int(now) - 29)
+    proof_ok = _proof(key, cred_ok, "n1", ts=int(now))
+    assert _decide(cred_ok, proof_ok,
+                   _trust(pub), {"n1": now}, now=now)[1] == "OK"
+    assert _decide(_cred(priv, _holder_pub(key), exp=int(now) - 31), "",
+                   _trust(pub), {}, now=now)[1] == "EXPIRED"
+
+
+def test_check_precedence_earliest_wins():
+    priv, pub = ed25519_keypair()
+    key = _holder()
+    # malformed shape beats an expired timestamp
+    assert _decide({"v": 1}, "", _trust(pub), {}, now=100000.0)[1] == "MALFORMED"
+    # expired beats a bad signature (can't even get to crypto)
+    bad = _cred(priv, _holder_pub(key), exp=10)
+    bad["s"] = "bogus"
+    assert _decide(bad, "", _trust(pub), {}, now=100000.0)[1] == "EXPIRED"
+    # wrong verifier beats issuer mismatch
+    other = _cred(priv, _holder_pub(key), vid="SHOP-B", iss="EVIL")
+    assert _decide(other, "", _trust(pub), {}, now=1000.0)[1] == "WRONG_VERIFIER"
+
+
 def test_decide_order():
     priv, pub = ed25519_keypair()
     key = _holder()

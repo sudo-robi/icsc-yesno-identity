@@ -14,7 +14,7 @@ export ISSUER_DB="${ISSUER_DB:-issuer/issuer.db}"
 export VERIFIER_DB="${VERIFIER_DB:-verifier/receipts.db}"
 export OTP_ENABLED="${OTP_ENABLED:-1}"
 
-PY=python3
+PY=${PY:-python3}
 [ -x .venv/bin/python ] && PY=.venv/bin/python
 
 $PY scripts/seed.py --db "$ISSUER_DB" >/dev/null
