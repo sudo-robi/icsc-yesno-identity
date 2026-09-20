@@ -10,3 +10,6 @@ jobs:
       - run: pip install -r requirements.txt
       - run: ruff check .
       - run: pytest -q --cov=shared --cov=issuer --cov=verifier --cov-report=term-missing --cov-fail-under=90
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - run: node --test tests/test_scanutil.mjs tests/test_qr_stack.mjs

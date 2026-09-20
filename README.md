@@ -40,7 +40,9 @@ PORT=5002 .venv/bin/python -m verifier.app &
   demo only, re-pair takes 10s.
 
 ## Demo (5 min, live attack demos)
-1. Issue U001 → paste into verifier → YES (`mode: static`).
+1. Issue U001 → paste into verifier → YES (`mode: static`). Or scan the holder QR
+   with the shop camera (needs HTTPS or localhost for camera access — plain HTTP
+   LAN IPs can't use `getUserMedia`; paste-JSON always works).
 2. Screenshot the QR to a second phone → verify against a fresh challenge → REPLAY (copy blocked).
 3. Answer the challenge (holder asks the issuer to embed the live nonce) → YES (`mode: challenge`, single-use).
 4. Paste `{"a":"over_18","r":1,"s":"fake"}` → BADSIG.
