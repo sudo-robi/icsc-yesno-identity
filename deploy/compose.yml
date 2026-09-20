@@ -1,0 +1,36 @@
+name: yn-id
+services:
+  issuer:
+    build: ..
+    # run from the repo root: docker compose up (this file lives in deploy/)
+    image: yn-id:latest
+    environment:
+      APP: issuer
+      PORT: "5001"
+      ADMIN_TOKEN: ${ADMIN_TOKEN:?set ADMIN_TOKEN}
+      ISSUER_DB: /data/issuer.db
+      ISSUER_KEYDIR: /data/keys
+      BEHIND_PROXY: "0"
+    ports:
+      - "5001:5001"
+    volumes:
+      - issuer-data:/data
+  verifier:
+    build: ..
+    image: yn-id:latest
+    environment:
+      APP: verifier
+      PORT: "5002"
+      ADMIN_TOKEN: ${ADMIN_TOKEN:?set ADMIN_TOKEN}
+      VERIFIER_DB: /data/receipts.db
+      TRUSTBUNDLE_PATH: /data/trustbundle.json
+      OTP_SECRETS_PATH: /data/otp_secrets.json
+      RECEIPT_KEY_DIR: /data/keys
+      BEHIND_PROXY: "0"
+    ports:
+      - "5002:5002"
+    volumes:
+      - verifier-data:/data
+volumes:
+  issuer-data:
+  verifier-data:

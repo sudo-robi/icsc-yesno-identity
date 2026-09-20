@@ -1,61 +1,64 @@
 %%{init: {"flowchart": {"defaultRenderer": "elk"}}}%%
 flowchart TD
 
+node_operator(("Operator"))
 node_holder_actor(("Holder"))
-node_pairing_actor(("Pairing Operator"))
-node_auditor_actor(("Auditor"))
+node_auditor(("Auditor"))
 
-subgraph group_holder["Holder Client"]
-  node_holder_ui["Holder App<br/>[holder/index.html]"]
+subgraph group_holder["Holder PWA"]
+  node_holder_ui["Holder App<br/>[holder/app.js]"]
+  node_holder_keys[("Device Keys<br/>[IndexedDB, per shop]")]
 end
 
 subgraph group_issuance["Credential Issuance"]
   node_issuer_api["Issuer Service<br/>[issuer/app.py]"]
-  node_issuer_records[("Issuer Records<br/>[issuer/app.py]")]
-  node_issuer_keys[("Issuer Key Store<br/>[issuer/app.py]")]
+  node_issuer_records[("Users + Codes + Keys<br/>[issuer/repo.py]")]
 end
 
 subgraph group_verification["Offline Verification"]
+  node_challenge["Challenge QR<br/>{n,vid,exp}"]
   node_verifier_api["Verifier Routes<br/>[verifier/app.py]"]
-  node_decision_engine["Decision Engine<br/>[verifier/app.py]"]
-  node_challenge_nonces[("Challenge Nonces<br/>[verifier/app.py]")]
-  node_trust_bundle[("Trust Bundle<br/>[verifier/app.py]")]
+  node_decision_engine["Decision Engine<br/>[verifier/services.py]"]
+  node_nonce_store[("Nonces (SQLite, atomic)<br/>[verifier/repo.py]")]
+  node_trust_bundle[("Trust Bundle (pinned)<br/>[verifier/repo.py]")]
 end
 
 subgraph group_audit["Audit And Fallback"]
-  node_otp_handler["OTP Fallback<br/>[verifier/app.py]"]
-  node_otp_state[("Used Code Store<br/>[verifier/app.py]")]
-  node_otp_secrets[("OTP Secrets<br/>[verifier/app.py]")]
-  node_receipt_ledger[("Receipt Ledger<br/>[verifier/app.py]")]
+  node_otp_handler["OTP Fallback (flagged)<br/>[verifier/app.py]"]
+  node_otp_state[("Used Codes (sub,step)<br/>[verifier/repo.py]")]
+  node_otp_secrets[("OTP Secrets (0600 file)<br/>[operator provisioned]")]
+  node_receipt_ledger[("Receipt Ledger (signed head)<br/>[verifier/repo.py]")]
   node_receipt_api["Receipt Export<br/>[verifier/app.py]"]
 end
 
 subgraph group_shared["Shared Libraries"]
-  node_crypto["Crypto Primitives<br/>[shared/crypto.py]"]
-  node_schemas["Data Contracts<br/>[shared/schemas.py]"]
+  node_crypto["Crypto (Ed25519/P-256/HMAC)<br/>[shared/crypto.py]"]
+  node_schemas["Contracts<br/>[shared/schemas.py]"]
+  node_canonical["Canonical JSON<br/>[shared/canonical.py]"]
 end
 
-%% Holder <-> Issuer
+%% Enrollment (one time, online)
+node_operator -->|"creates code"| node_issuer_api
 node_holder_actor -->|"uses"| node_holder_ui
-node_holder_ui -->|"requests credential"| node_issuer_api
-node_issuer_api -->|"returns credential"| node_holder_ui
+node_holder_ui -->|"generates P-256 key"| node_holder_keys
+node_holder_ui -->|"POST /enroll {code,vid,holder_pub}"| node_issuer_api
 node_issuer_api -->|"reads user"| node_issuer_records
-node_issuer_api -->|"loads keys"| node_issuer_keys
+node_issuer_api -->|"returns credential"| node_holder_ui
 
-%% Trust distribution (out-of-band)
-node_issuer_api -->|"publishes signed bundle<br/>[/bundle]"| node_pairing_actor
-node_pairing_actor -->|"syncs bundle"| node_verifier_api
-node_verifier_api -->|"writes bundle"| node_trust_bundle
-node_verifier_api -->|"writes secrets"| node_otp_secrets
+%% Trust distribution (out-of-band, signed)
+node_issuer_api -->|"GET /bundle (signed)"| node_operator
+node_operator -->|"POST /sync + admin token"| node_verifier_api
+node_verifier_api -->|"pins bundle (TOFU)"| node_trust_bundle
 
-%% Verification flow (numbered)
-node_holder_ui -->|"1. requests challenge"| node_verifier_api
-node_holder_ui -->|"2. submits credential"| node_verifier_api
-node_verifier_api -->|"3. returns result"| node_holder_ui
-node_verifier_api -->|"generates nonce"| node_challenge_nonces
+%% Verification flow (numbered, fully offline)
+node_verifier_api -->|"1. shows challenge"| node_challenge
+node_holder_ui -->|"2. scans challenge"| node_challenge
+node_holder_ui -->|"3. signs proof on-device"| node_holder_keys
+node_holder_ui -->|"4. shows {c,p} QR"| node_verifier_api
 node_verifier_api -->|"dispatches check"| node_decision_engine
 node_decision_engine -->|"reads trust"| node_trust_bundle
-node_decision_engine -->|"checks nonce"| node_challenge_nonces
+node_decision_engine -->|"consumes nonce (atomic)"| node_nonce_store
+node_verifier_api -->|"5. YES/NO"| node_holder_actor
 node_verifier_api -->|"writes receipt"| node_receipt_ledger
 
 %% OTP fallback
@@ -65,39 +68,25 @@ node_otp_handler -->|"checks reuse"| node_otp_state
 node_otp_handler -->|"writes receipt"| node_receipt_ledger
 
 %% Audit
-node_auditor_actor -->|"requests export"| node_receipt_api
+node_auditor -->|"requests export"| node_receipt_api
 node_receipt_api -->|"reads receipts"| node_receipt_ledger
 
-%% Shared library dependencies (dotted = compile/import-time use)
+%% Shared library dependencies (dotted = import-time use)
 node_issuer_api -.->|"signs"| node_crypto
 node_decision_engine -.->|"verifies"| node_crypto
 node_otp_handler -.->|"computes code"| node_crypto
-node_issuer_api -.->|"builds + asserts"| node_schemas
+node_issuer_api -.->|"validates via"| node_schemas
 node_verifier_api -.->|"validates via"| node_schemas
-
-click node_issuer_api "https://github.com/sudo-robi/icsc-yesno-identity/blob/main/issuer/app.py"
-click node_issuer_records "https://github.com/sudo-robi/icsc-yesno-identity/blob/main/issuer/app.py"
-click node_issuer_keys "https://github.com/sudo-robi/icsc-yesno-identity/blob/main/issuer/app.py"
-click node_holder_ui "https://github.com/sudo-robi/icsc-yesno-identity/blob/main/holder/index.html"
-click node_verifier_api "https://github.com/sudo-robi/icsc-yesno-identity/blob/main/verifier/app.py"
-click node_decision_engine "https://github.com/sudo-robi/icsc-yesno-identity/blob/main/verifier/app.py"
-click node_challenge_nonces "https://github.com/sudo-robi/icsc-yesno-identity/blob/main/verifier/app.py"
-click node_trust_bundle "https://github.com/sudo-robi/icsc-yesno-identity/blob/main/verifier/app.py"
-click node_crypto "https://github.com/sudo-robi/icsc-yesno-identity/blob/main/shared/crypto.py"
-click node_receipt_ledger "https://github.com/sudo-robi/icsc-yesno-identity/blob/main/verifier/app.py"
-click node_receipt_api "https://github.com/sudo-robi/icsc-yesno-identity/blob/main/verifier/app.py"
-click node_otp_handler "https://github.com/sudo-robi/icsc-yesno-identity/blob/main/verifier/app.py"
-click node_otp_state "https://github.com/sudo-robi/icsc-yesno-identity/blob/main/verifier/app.py"
-click node_otp_secrets "https://github.com/sudo-robi/icsc-yesno-identity/blob/main/verifier/app.py"
-click node_schemas "https://github.com/sudo-robi/icsc-yesno-identity/blob/main/shared/schemas.py"
+node_issuer_api -.->|"canonical bytes"| node_canonical
+node_decision_engine -.->|"canonical bytes"| node_canonical
 
 classDef toneBlue fill:#dbeafe,stroke:#2563eb,stroke-width:1.5px,color:#172554
 classDef toneAmber fill:#fef3c7,stroke:#d97706,stroke-width:1.5px,color:#78350f
 classDef toneMint fill:#dcfce7,stroke:#16a34a,stroke-width:1.5px,color:#14532d
 classDef toneRose fill:#ffe4e6,stroke:#e11d48,stroke-width:1.5px,color:#881337
 classDef toneIndigo fill:#e0e7ff,stroke:#4f46e5,stroke-width:1.5px,color:#312e81
-class node_issuer_api,node_issuer_records,node_issuer_keys,node_holder_ui toneBlue
-class node_verifier_api,node_decision_engine,node_challenge_nonces,node_trust_bundle toneAmber
-class node_crypto,node_schemas toneMint
+class node_issuer_api,node_issuer_records,node_holder_ui,node_holder_keys toneBlue
+class node_verifier_api,node_decision_engine,node_nonce_store,node_trust_bundle,node_challenge toneAmber
+class node_crypto,node_schemas,node_canonical toneMint
 class node_receipt_ledger,node_receipt_api,node_otp_handler,node_otp_state,node_otp_secrets toneRose
-class node_holder_actor,node_pairing_actor,node_auditor_actor toneIndigo
+class node_holder_actor,node_operator,node_auditor toneIndigo

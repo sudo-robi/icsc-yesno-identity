@@ -1,0 +1,14 @@
+{
+  "name": "My ID — Yes/No",
+  "short_name": "My ID",
+  "description": "Prove over-18 with a yes/no, without revealing your identity.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#1d4ed8",
+  "icons": [
+    {"src": "./static/icon-192.png", "sizes": "192x192", "type": "image/png"},
+    {"src": "./static/icon-512.png", "sizes": "512x512", "type": "image/png"}
+  ]
+}

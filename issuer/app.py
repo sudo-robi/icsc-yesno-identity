@@ -1,105 +1,56 @@
-"""Issuer service routes (thin Flask layer over issuer.service / issuer.repo).
+"""Issuer service routes (thin Flask layer over issuer.services / issuer.repo).
 
-Module globals (DB, KEYDIR, ISSUER_ID, ADMIN_TOKEN) are the documented override
-points used by tests, run.sh and live_demo.py — the service functions below
-take explicit arguments and read these globals at call time.
+Env: ISSUER_DB, ISSUER_KEYDIR, ISSUER_ID, ISSUER_PRIV_HEX, ADMIN_TOKEN (required
+outside debug), CRED_TTL_SEC, OTP_ENABLED, ENROLL_CODE_TTL_SEC, BUNDLE_TTL_SEC.
 """
-import json
-import logging
 import os
 import time
 
-from flask import Flask, jsonify, render_template, request
-from flask_limiter import Limiter
-from flask_limiter.util import get_remote_address
+from flask import jsonify, render_template, request, send_from_directory
 from marshmallow import Schema, fields, ValidationError
 
-from issuer import repo, service
+import issuer.repo as repo
+from issuer import services
 from shared import config
-from shared.schemas import unsigned_body  # noqa: F401  (re-exported: test hook)
+from shared.errors import err
+from shared.web import (
+    admin_required, base_logger, log_event, make_app, require_admin_configured,
+)
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
-log = logging.getLogger("issuer")
+log = base_logger("issuer")
+
+require_admin_configured()
+
+require_admin_configured()
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-DB = config.file_path(config.ISSUER_DB_ENV, "issuer.db", BASE)
-KEYDIR = config.dir_path(config.ISSUER_KEYDIR_ENV, "keys", os.path.dirname(BASE))
-ISSUER_ID = os.environ.get(config.ISSUER_ID_ENV, config.ISSUER_ID_DEFAULT)
+DB = config.ISSUER_DB
+KEYDIR = config.ISSUER_KEYDIR
+ISSUER_ID = config.ISSUER_ID
 
-ADMIN_TOKEN = os.environ.get(config.ISSUER_ADMIN_TOKEN_ENV)
-if not ADMIN_TOKEN:
-    import secrets as _rand
-
-    ADMIN_TOKEN = _rand.token_hex(16)
-    log.warning(json.dumps({"event": "admin_token_generated",
-                            "note": "set ISSUER_ADMIN_TOKEN to pin it",
-                            "token": ADMIN_TOKEN}))
-
-app = Flask(__name__)
-limiter = Limiter(get_remote_address, app=app,
-                  default_limits=config.DEFAULT_LIMITS,
-                  storage_uri=os.environ.get(config.RATELIMIT_STORAGE_ENV,
-                                             config.RATELIMIT_STORAGE_DEFAULT))
+app, limiter = make_app("issuer", config.RATELIMIT_DEFAULT)
 
 
-class IssueSchema(Schema):
-    """POST /issue body."""
-    user_id = fields.Str(required=True, validate=lambda s: 1 <= len(s) <= 32)
-    verifier_id = fields.Str(load_default="SHOP-A", validate=lambda s: len(s) <= 32)
-    nonce = fields.Str(load_default="", validate=lambda s: len(s) <= 64)
+class EnrollSchema(Schema):
+    """POST /issuer/enroll body."""
+    code = fields.Str(required=True, validate=lambda s: 1 <= len(s) <= 128)
+    verifier_id = fields.Str(required=True, validate=lambda s: 1 <= len(s) <= 32)
+    holder_pub = fields.Str(required=True, validate=lambda s: 1 <= len(s) <= 128)
 
 
 class RevokeSchema(Schema):
-    """POST /revoke body."""
-    user_id = fields.Str(required=True)
+    """POST /issuer/admin/revoke body."""
+    user_id = fields.Str(required=True, validate=lambda s: 1 <= len(s) <= 32)
 
 
-# --- compat wrappers (used by tests, run.sh, live_demo.py) ---
-def db():
-    """Open the issuer database."""
-    return repo.connect(DB)
+class RotateSchema(Schema):
+    """POST /issuer/admin/rotate body."""
+    activate = fields.Bool(load_default=False)
 
 
-def init_db():
-    """Create + seed the issuer database (idempotent)."""
-    repo.init_db(DB)
-
-
-def load_keys() -> tuple[str, str]:
-    """Load (priv, pub) hex pair via KEYDIR (overridable for tests)."""
-    return service.load_keys(KEYDIR)
-
-
-def is_adult(dob_str: str, today=None) -> bool:
-    """Calendar-correct 18+ check (re-exported from issuer.service)."""
-    return service.is_adult(dob_str, today)
-
-
-def current_revlist(priv_hex: str) -> dict:
-    """Raw revocation log for this issuer."""
-    return service.current_revlist(
-        rev_version=repo.revlist_version(DB), at_ts=int(time.time()),
-        revoked_ids=repo.revoked_user_ids(DB), priv_hex=priv_hex)
-
-
-def build_bundle(verifier_id: str, priv_hex: str, pub_hex: str) -> dict:
-    """Signed per-verifier trust bundle (pseudonyms only, no PII)."""
-    return service.build_bundle(
-        verifier_id=verifier_id, users=repo.all_user_status(DB),
-        rev_version=repo.revlist_version(DB),
-        issuer_id=ISSUER_ID, priv_hex=priv_hex, pub_hex=pub_hex)
-
-
-def require_admin():
-    """Operator auth for /revoke + /rotate. None if OK, else (body, 403)."""
-    required = os.environ.get(config.ISSUER_ADMIN_TOKEN_ENV, ADMIN_TOKEN)
-    presented = request.headers.get("X-Admin-Token")
-    if presented is None and request.is_json:
-        presented = (request.get_json(silent=True) or {}).get("admin_token")
-    if not service.admin_ok(presented, required):
-        log.warning(json.dumps({"event": "admin_rejected", "path": request.path}))
-        return {"error": "bad admin token"}, 403
-    return None
+def _active_key() -> dict:
+    key = services.ensure_active_key(DB, KEYDIR)
+    return key
 
 
 @app.get("/healthz")
@@ -110,127 +61,190 @@ def healthz():
 
 @app.get("/pubkey")
 def pubkey():
-    """Current public key + revlist version (bootstrap for pairing)."""
-    _, pub = load_keys()
-    return {"iss": ISSUER_ID, "pubkey_hex": pub, "v": repo.revlist_version(DB)}
+    """Current public key + bundle version (bootstrap for pairing)."""
+    key = _active_key()
+    return {"iss": ISSUER_ID, "pubkey_hex": key["pub"],
+            "fingerprint": services.fingerprint(key["pub"]),
+            "v": repo.bundle_version(DB)}
 
 
 @app.get("/bundle")
-@app.get("/trustbundle")  # alias: matches the documented pairing name
 def bundle():
-    """Signed per-verifier trust bundle (the documented revocation channel)."""
-    verifier_id = request.args.get("verifier_id", "SHOP-A")
+    """Signed per-verifier trust bundle (?vid=SHOP-A). Public, signed."""
+    verifier_id = request.args.get("vid", request.args.get("verifier_id", "SHOP-A"))
     if len(verifier_id) > 32:
-        return {"error": "verifier_id too long"}, 400
-    priv, pub = load_keys()
-    return jsonify(build_bundle(verifier_id, priv, pub))
+        return err("MALFORMED", "vid too long"), 400
+    key = _active_key()
+    staged = _staged_key()
+    return jsonify(services.build_bundle(
+        verifier_id=verifier_id, users=repo.all_user_status(DB),
+        rev_version=repo.bundle_version(DB), issued_at=int(time.time()),
+        ttl_sec=config.BUNDLE_TTL_SEC, issuer_id=ISSUER_ID,
+        priv_hex=key["priv"], pub_hex=key["pub"],
+        next_pub=staged["pub"] if staged else None))
 
 
-@app.get("/revlist")
-def revlist():
-    """Raw revocation log (user IDs — issuer-internal transparency, not the channel)."""
-    priv, _ = load_keys()
-    return jsonify(current_revlist(priv))
+def _staged_key() -> dict | None:
+    return repo.staged_key(DB)
 
 
-@app.post("/issue")
-@limiter.limit(config.LIMIT_ISSUE)
-def issue():
-    """Sign a credential for an enrolled user (open enrollment: prototype boundary)."""
+@app.post("/enroll")
+@limiter.limit(config.RATELIMIT_SENSITIVE)
+def enroll():
+    """Redeem a single-use enrollment code for a holder key. Returns the
+    signed credential (+ OTP secret when the flag is on)."""
     try:
-        args = IssueSchema().load(request.get_json(force=True))
+        args = EnrollSchema().load(request.get_json(force=True))
     except ValidationError as e:
-        return {"error": e.messages}, 400
+        return err("MALFORMED", str(e.messages)), 400
+    except Exception:
+        return err("MALFORMED"), 400
+    redeemed = repo.consume_enrollment_code(DB, args["code"])
+    if not redeemed["ok"]:
+        return err(redeemed["reason"]), 400
     try:
-        payload = service.issue_credential(
-            user=repo.get_user(DB, args["user_id"]),
-            verifier_id=args["verifier_id"], nonce=args.get("nonce", ""),
-            issuer_id=ISSUER_ID, priv_hex=load_keys()[0], now=time.time())
-    except service.UnknownUserError:
-        return {"error": "unknown user"}, 404
-    except service.RevokedError:
-        return {"error": "revoked"}, 403
-    except service.ContractDriftError as e:
-        log.error(json.dumps({"event": "contract_drift", "detail": str(e)}))
-        return {"error": "issuer contract drift"}, 500
-    log.info(json.dumps({"event": "issue", "uid_p": payload["uid_p"],
-                         "r": payload["r"]}))
-    return jsonify(payload)
+        payload = services.issue_credential(
+            user=repo.get_user(DB, redeemed["user_id"]),
+            verifier_id=args["verifier_id"], holder_pub_b64u=args["holder_pub"],
+            issuer_id=ISSUER_ID, priv_hex=_active_key()["priv"],
+            now=time.time(), ttl_sec=config.CRED_TTL_SEC)
+    except services.UnknownUserError:
+        return err("UNKNOWN_CODE"), 400
+    except services.RevokedError:
+        return err("REVOKED_USER"), 403
+    except ValueError:
+        return err("BAD_PUBKEY"), 400
+    except services.ContractDriftError as e:
+        log_event(log, "contract_drift", detail=str(e))
+        return err("MALFORMED", "issuer error"), 500
+    log_event(log, "enroll_ok", vid=args["verifier_id"])
+    response: dict = {"credential": payload}
+    if config.OTP_ENABLED:
+        user = repo.get_user(DB, redeemed["user_id"])
+        assert user is not None
+        response["otp_secret"] = services.otp_secret_for(
+            user["master_secret"], args["verifier_id"])
+    return jsonify(response)
 
 
-@app.get("/otp")
-@limiter.limit(config.LIMIT_ISSUE)
-def otp():
-    """Holder fallback-code source (feature phones): current 6-digit code.
-    Open like /issue — enrollment identity proofing is a prototype boundary."""
-    user_id = request.args.get("user_id", "")
-    verifier_id = request.args.get("verifier_id", "SHOP-A")
-    if not (1 <= len(user_id) <= 32 and len(verifier_id) <= 32):
-        return {"error": "bad user_id/verifier_id"}, 400
-    try:
-        code, step_sec = service.fetch_otp_code(
-            user=repo.get_user(DB, user_id), verifier_id=verifier_id,
-            now=time.time())
-    except service.UnknownUserError:
-        return {"error": "unknown user"}, 404
-    return {"code": code, "verifier": verifier_id, "step_sec": step_sec}
+@app.post("/admin/users/<user_id>/enrollment-code")
+@admin_required
+def enrollment_code(user_id: str):
+    """Mint a single-use enrollment code (returned ONCE)."""
+    if repo.get_user(DB, user_id) is None:
+        return err("UNKNOWN_CODE", "no such user"), 404
+    code = repo.create_enrollment_code(DB, user_id, config.ENROLL_CODE_TTL_SEC)
+    repo.audit(DB, "admin", "enrollment-code", "")
+    return {"code": code, "user_id": user_id,
+            "expires_in": config.ENROLL_CODE_TTL_SEC}
 
 
-@app.post("/revoke")
+@app.post("/admin/revoke")
+@admin_required
 def revoke():
-    """Revoke a user (operator only) and bump the revlist version."""
-    denied = require_admin()
-    if denied:
-        return denied
+    """Revoke a user and bump the bundle version."""
     try:
         args = RevokeSchema().load(request.get_json(force=True))
     except ValidationError as e:
-        return {"error": e.messages}, 400
+        return err("MALFORMED", str(e.messages)), 400
+    except Exception:
+        return err("MALFORMED"), 400
+    if repo.get_user(DB, args["user_id"]) is None:
+        return err("UNKNOWN_CODE", "no such user"), 404
     repo.set_revoked(DB, args["user_id"])
-    version = repo.bump_revlist(DB)
-    log.info(json.dumps({"event": "revoke", "v": version}))
-    return jsonify(current_revlist(load_keys()[0]))
+    version = repo.bump_bundle_version(DB)
+    repo.audit(DB, "admin", "revoke", "")
+    log_event(log, "revoke", v=version)
+    return {"ok": True, "v": version}
 
 
-@app.post("/rotate")
+@app.post("/admin/rotate")
+@admin_required
 def rotate():
-    """Issuer-compromise recovery: fast key rotation, bumps revlist version."""
-    denied = require_admin()
-    if denied:
-        return denied
+    """Stage a rotation key, or activate the staged one.
+
+    Rotation chain: bundle N (signed by K1) advertises next_pub=K2; verifiers
+    learn K2; activating K2 makes it the signer. A key the chain never
+    announced is rejected by verifiers.
+    """
     try:
-        priv_new, pub_new = service.rotate_keys(KEYDIR)
-    except service.EnvManagedKeyError as e:
-        return {"error": str(e)}, 409
-    version = repo.bump_revlist(DB)
-    log.warning(json.dumps({"event": "key_rotation", "new_v": version}))
-    return {"iss": ISSUER_ID, "pubkey_hex": pub_new, "v": version,
-            "note": "redistribute trustbundle to verifiers"}
+        args = RotateSchema().load(request.get_json(silent=True) or {})
+    except ValidationError as e:
+        return err("MALFORMED", str(e.messages)), 400
+    if os.environ.get("ISSUER_PRIV_HEX"):
+        return err("MALFORMED", "key is env-managed; rotate ISSUER_PRIV_HEX"), 409
+    if args.get("activate"):
+        staged = _staged_key()
+        if staged is None:
+            return err("MALFORMED", "nothing staged"), 400
+        repo.deactivate_all_keys(DB)
+        if not repo.activate_key(DB, staged["pub"]):
+            return err("MALFORMED", "activation failed"), 500
+        version = repo.bump_bundle_version(DB)
+        repo.audit(DB, "admin", "rotate-activate", "")
+        log_event(log, "key_activated", v=version)
+        return {"ok": True, "pub": staged["pub"], "v": version}
+    from shared.crypto import ed25519_keypair
+
+    _active_key()  # ensure an active row predates the staged one (staged = inactive NEWER than active)
+    priv_hex, pub_hex = ed25519_keypair()
+    repo.store_key(DB, priv_hex, pub_hex, active=False)
+    version = repo.bump_bundle_version(DB)
+    repo.audit(DB, "admin", "rotate-stage", "")
+    log_event(log, "key_staged", v=version)
+    return {"ok": True, "staged_pub": pub_hex,
+            "fingerprint": services.fingerprint(pub_hex), "v": version}
+
+
+@app.get("/admin/otp-secrets")
+@admin_required
+def otp_secrets():
+    """Per-shop OTP secrets for adult, non-revoked users ONLY (admin channel)."""
+    if not config.OTP_ENABLED:
+        return err("OTP_DISABLED"), 404
+    verifier_id = request.args.get("vid", request.args.get("verifier_id", "SHOP-A"))
+    if len(verifier_id) > 32:
+        return err("MALFORMED", "vid too long"), 400
+    out = {}
+    for user in repo.all_user_status(DB):
+        if user["revoked"] or not services.is_adult(user["dob"]):
+            continue
+        from shared.crypto import pseudonym
+
+        out[pseudonym(user["master_secret"], verifier_id)] = \
+            services.otp_secret_for(user["master_secret"], verifier_id)
+    return jsonify({"vid": verifier_id, "secrets": out})
+
+
+@app.get("/holder/")
+def holder_page():
+    """Holder PWA, same-origin with /enroll (offline-capable after install)."""
+    holder_dir = os.path.join(os.path.dirname(BASE), "holder")
+    return send_from_directory(holder_dir, "index.html")
+
+
+@app.get("/holder/<path:filename>")
+def holder_files(filename):
+    """Holder assets (app.js, sw.js, manifest, static/)."""
+    holder_dir = os.path.join(os.path.dirname(BASE), "holder")
+    return send_from_directory(holder_dir, filename)
 
 
 @app.get("/")
 def index():
-    """Operator dashboard (synthetic seed data — no real PII, no DOBs shown)."""
-    users = [{"id": u["id"], "revoked": bool(u["revoked"]),
-              "adult": service.is_adult(u["dob"])} for u in repo.list_users(DB)]
-    priv, pub = load_keys()
-    return render_template("issuer.html", users=users, pub=pub,
-                           iss=ISSUER_ID, rev=current_revlist(priv))
+    """Admin dashboard: IDs + status only, never DOBs."""
+    users = [{"id": u["id"], "revoked": bool(u["revoked"])} for u in repo.list_users(DB)]
+    key = _active_key()
+    staged = _staged_key()
+    return render_template("issuer.html", users=users, iss=ISSUER_ID,
+                           fingerprint=services.fingerprint(key["pub"]),
+                           staged_fp=services.fingerprint(staged["pub"]) if staged else None,
+                           version=repo.bundle_version(DB))
 
 
-init_db()  # import-safe (idempotent): needed for gunicorn/Vercel
-
-
-# Dual hosting: serve at root AND under /issuer (Vercel services subpath).
-# Assigned here (not after the __main__ guard) so `python -m issuer.app` matches deploys.
-from shared.wsgi import PrefixStrip as _PS  # noqa: E402
-app.wsgi_app = _PS(app.wsgi_app, ["/issuer"])
-if config.BEHIND_PROXY:  # Render/Vercel terminate TLS at the edge
-    from werkzeug.middleware.proxy_fix import ProxyFix as _PF  # noqa: E402
-    app.wsgi_app = _PF(app.wsgi_app, x_for=1, x_proto=1)
+repo.init_db(DB)
 
 
 if __name__ == "__main__":  # pragma: no cover - dev entrypoint
-    init_db()
-    load_keys()
-    app.run(port=int(os.environ.get("PORT", 5001)), debug=False)
+    repo.init_db(DB)
+    app.run(port=int(os.environ.get("PORT", 5001)), debug=config.DEBUG)

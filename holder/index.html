@@ -3,314 +3,79 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Holder — Yes/No ID</title>
-<script src="../static/qrcode-lib.js" defer></script>
-<script src="../static/scanutil.js" defer></script>
-<script src="../static/scanner.js" defer></script>
-<style>
-:root{
-  --bg:#ffffff; --fg:#111827; --muted:#6b7280; --card:#f3f4f6;
-  --accent:#1d4ed8; --accent-fg:#ffffff; --ok:#047857; --no:#b91c1c;
-  --border:#d1d5db; --radius:12px; --tap:48px;
-  color-scheme:light dark;
-}
-@media (prefers-color-scheme:dark){
-  :root{--bg:#111827; --fg:#f9fafb; --muted:#9ca3af; --card:#1f2937;
-    --accent:#60a5fa; --accent-fg:#111827; --ok:#34d399; --no:#f87171;
-    --border:#374151;}
-}
-*{box-sizing:border-box}
-html{-webkit-text-size-adjust:100%}
-body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
-  background:var(--bg); color:var(--fg); margin:0; padding:0 1rem 3rem;
-  max-width:520px; margin-inline:auto;}
-h1{font-size:1.4rem; margin:1.2rem 0 .4rem}
-h2{font-size:1.05rem; margin:.2rem 0 .6rem}
-.sub{color:var(--muted); margin:0 0 1rem}
-button{min-height:var(--tap); min-width:var(--tap); font-size:1rem;
-  border-radius:var(--radius); border:1px solid var(--border);
-  background:var(--card); color:var(--fg); padding:.6rem 1.1rem; cursor:pointer;}
-button.primary{background:var(--accent); border-color:var(--accent); color:var(--accent-fg); font-weight:700; width:100%;}
-button:disabled{opacity:.5; cursor:wait}
-button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible{
-  outline:3px solid var(--accent); outline-offset:2px;}
-input,select{font-size:1rem; min-height:var(--tap); border-radius:8px;
-  border:1px solid var(--border); background:var(--bg); color:var(--fg);
-  padding:.4rem .6rem; max-width:100%;}
-label{display:block; margin:.5rem 0}
-.card{background:var(--card); border:1px solid var(--border); border-radius:var(--radius);
-  padding:1rem; margin:1rem 0; text-align:center}
-#qrCanvas{width:min(72vw,260px); height:auto; background:#fff; border-radius:8px;}
-#scanVideo{width:100%; border-radius:8px; background:#000; display:block}
-.ringwrap{display:flex; align-items:center; justify-content:center; gap:.6rem; margin-top:.6rem}
-#err{background:var(--no); color:#fff; border-radius:var(--radius); padding:.7rem;
-  margin:.8rem 0; font-weight:600}
-#err:empty{display:none}
-#okmsg{background:var(--ok); color:#fff; border-radius:var(--radius); padding:.7rem; margin:.8rem 0}
-#okmsg:empty{display:none}
-#otpCode{font-size:2.2rem; letter-spacing:.35rem; font-variant-numeric:tabular-nums; font-weight:700}
-.muted{color:var(--muted); font-size:.9rem}
-details{border:1px solid var(--border); border-radius:var(--radius); padding:.6rem .8rem; margin:.8rem 0}
-summary{cursor:pointer; font-weight:600; min-height:var(--tap); display:flex; align-items:center}
-pre{white-space:pre-wrap; word-break:break-all; font-size:.72rem; text-align:left;
-  background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:.6rem; max-height:180px; overflow:auto}
-.row{display:flex; gap:.5rem; flex-wrap:wrap; justify-content:center}
-@media (prefers-reduced-motion:reduce){ *{transition:none !important; animation:none !important;} }
-</style>
+<meta name="theme-color" content="#1d4ed8">
+<title>My ID — Yes/No</title>
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="stylesheet" href="./static/app.css">
+<link rel="icon" href="./static/icon.svg" type="image/svg+xml">
+<script src="./static/vendor/qrcode-lib.js" defer></script>
+<script src="./static/vendor/scanutil.js" defer></script>
+<script src="./static/vendor/scanner.js" defer></script>
 </head>
 <body>
-<!-- Holder client. Same page is wrapped in an Android WebView for native demo. -->
 <h1>My ID</h1>
 <p class="sub">Shows <strong>yes / no</strong> only — never your name or birth date.</p>
 
 <div id="err" role="alert" aria-live="assertive"></div>
 <div id="okmsg" role="status" aria-live="polite"></div>
 
-<section id="idleState" aria-label="Get started">
-  <button class="primary" id="getBtn" onclick="fetchCred()">Get my ID</button>
-  <p class="muted">Valid for 5 minutes. Works offline once loaded.</p>
-</section>
-
-<section id="activeState" class="card" hidden aria-label="Your ID card">
-  <canvas id="qrCanvas" width="260" height="260" role="img" aria-label="ID QR code"></canvas>
-  <div class="ringwrap">
-    <svg width="44" height="44" viewBox="0 0 44 44" aria-hidden="true">
-      <circle cx="22" cy="22" r="18" fill="none" stroke="var(--border)" stroke-width="5"/>
-      <circle id="ring" cx="22" cy="22" r="18" fill="none" stroke="var(--accent)"
-        stroke-width="5" stroke-linecap="round" stroke-dasharray="113" stroke-dashoffset="0"
-        transform="rotate(-90 22 22)"/>
-    </svg>
-    <span id="ttl" class="muted" aria-live="polite">—</span>
-  </div>
-  <div class="row" style="margin-top:.6rem">
-    <button id="refreshBtn" onclick="fetchCred()">Refresh</button>
-  </div>
-  <div id="expiredNote" class="muted" hidden>Expired — tap Refresh for a new code.</div>
-</section>
-
-<section id="challengeState" class="card" aria-label="Answer a shop challenge">
-  <h2>Shop showed a challenge?</h2>
-  <div class="row">
-    <button id="scanBtn" onclick="toggleChallengeScan()">Scan shop QR</button>
-  </div>
-  <video id="scanVideo" playsinline muted hidden aria-label="Challenge scanner viewfinder"></video>
-  <p class="muted" id="scanHint" hidden>Point at the shop's QR. <span id="scanBackend"></span></p>
-  <label>…or paste the challenge code
-    <input id="nonceInput" inputmode="latin" autocomplete="off" spellcheck="false"
-      placeholder="paste the shop's code" style="width:100%">
+<section id="onboardState" class="card" aria-label="Enroll this device">
+  <h2>First: enroll this phone</h2>
+  <p class="muted">Enter the one-time code from the issuer, pick the shop. A private
+  key is generated <em>on this device</em> and never leaves it.</p>
+  <label>Enrollment code <input id="enrollCode" autocomplete="off" spellcheck="false" class="wide"></label>
+  <label>Shop
+    <select id="enrollShop"><option>SHOP-A</option><option>SHOP-B</option></select>
   </label>
-  <button id="answerBtn" onclick="answerChallenge()">Answer challenge</button>
+  <div class="row"><button class="primary" id="enrollBtn">Get my ID</button></div>
 </section>
 
-<section id="otpState" class="card" aria-label="Fallback code">
+<section id="homeState" hidden aria-label="Your credentials">
+  <div id="credList"></div>
+  <div class="row"><button id="addShopBtn">Add another shop</button></div>
+</section>
+
+<section id="showState" class="card" hidden aria-label="Show ID">
+  <h2 id="showTitle">Show ID</h2>
+  <canvas id="qrCanvas" width="260" height="260" role="img" aria-label="ID QR code"></canvas>
+  <p class="muted" id="proofTtl" aria-live="polite"></p>
+  <div class="row"><button id="doneBtn">Done</button></div>
+</section>
+
+<section id="challengeState" class="card" hidden aria-label="Answer a shop challenge">
+  <h2>Scan the shop's challenge</h2>
+  <div class="row"><button id="scanBtn">Scan shop QR</button></div>
+  <video id="scanVideo" playsinline muted hidden aria-label="Challenge scanner"></video>
+  <p class="muted" id="scanHint" hidden></p>
+  <label>…or paste the challenge JSON
+    <input id="challengeInput" autocomplete="off" spellcheck="false" class="wide"
+      placeholder='{"n":…, "vid":…, "exp":…}'>
+  </label>
+  <div class="row"><button class="primary" id="answerBtn">Show my ID</button></div>
+</section>
+
+<section id="otpState" class="card" hidden aria-label="Fallback code">
   <h2>No camera? Read this code aloud</h2>
   <div id="otpCode" aria-live="polite">——— ———</div>
-  <p class="muted" id="otpTtl">Tap below to show a code.</p>
-  <button onclick="fetchCode()">Show fallback code</button>
+  <p class="muted" id="otpTtl"></p>
 </section>
 
 <details>
   <summary>Demo settings</summary>
-  <label>Issuer URL <input id="iss" value="http://localhost:5001" inputmode="url" style="width:100%"></label>
-  <label>Your test ID
-    <select id="uid"><option>U001</option><option>U002</option><option>U003</option></select>
-  </label>
-  <label>Shop
-    <select id="shop"><option>SHOP-A</option><option>SHOP-B</option></select>
-  </label>
+  <label>Issuer URL <input id="iss" value="http://localhost:5001" inputmode="url" class="wide"></label>
+  <p class="muted">Issuer URL is the only setting. Test IDs live on the issuer, not here.</p>
 </details>
 
 <details>
-  <summary>Advanced: credential data</summary>
-  <pre id="rawJson">Nothing fetched yet.</pre>
-  <button onclick="copyJson()">Copy JSON</button>
+  <summary>Advanced</summary>
+  <pre id="rawJson">Nothing yet.</pre>
+  <div class="row"><button id="copyBtn">Copy JSON</button></div>
+  <h2>This device</h2>
+  <p class="muted">Keys are non-extractable: they cannot be exported or copied to
+  another phone. Forgetting wipes them permanently.</p>
+  <div class="row"><button id="forgetBtn">Forget this device</button></div>
 </details>
 
-<script>
-"use strict";
-/* All rendering uses textContent / canvas pixels — never innerHTML on server data. */
-var cred = null, expTs = 0, tickTimer = null, otpTimer = null;
-var autoRefreshed = false, challengeScanner = null;
-var RING_C = 113;
-
-function $(id){ return document.getElementById(id); }
-function showError(msg){ $("err").textContent = msg; }
-function clearError(){ $("err").textContent = ""; }
-function showOk(msg){ $("okmsg").textContent = msg; }
-function issuer(){ return $("iss").value.replace(/\/+$/, ""); }
-function setBusy(btn, busy, label){
-  btn.disabled = busy;
-  if (label) btn.textContent = busy ? "Working…" : label;
-}
-["click", "keydown", "touchstart"].forEach(function (ev) {
-  document.addEventListener(ev, function () { autoRefreshed = false; }, { passive: true });
-});
-
-function friendlyStatus(res){
-  if (res.status === 404) return "Unknown test ID on this issuer.";
-  if (res.status === 403) return "This ID is revoked and cannot be issued.";
-  if (res.status === 429) return "Too many tries — wait a minute.";
-  return "Issuer answered with an error (" + res.status + ").";
-}
-
-async function readJson(res){
-  var text = await res.text();
-  try { return JSON.parse(text); }
-  catch (e) { throw new Error("bad-body"); }
-}
-
-function showCred(data){
-  cred = data; expTs = data.exp || 0;
-  clearError();
-  autoRefreshed = false;
-  $("idleState").hidden = true;
-  $("activeState").hidden = false;
-  $("expiredNote").hidden = true;
-  var text = JSON.stringify(data);
-  $("rawJson").textContent = text;
-  if (!window.QRScanner || !QRScanner.drawQR($("qrCanvas"), text)) {
-    showError("Could not draw the QR code — use Copy JSON under Advanced instead.");
-  }
-  showOk("ID ready. Let the shop scan it.");
-  restartTick();
-}
-
-function restartTick(){
-  if (tickTimer) clearInterval(tickTimer);
-  var update = function(){
-    var s = Math.max(0, expTs - Math.floor(Date.now() / 1000));
-    var total = 300;
-    $("ttl").textContent = s > 0 ? "Expires in " + fmtTime(s) : "Expired";
-    $("ring").setAttribute("stroke-dashoffset", String(RING_C * (1 - s / total)));
-    if (s <= 0) {
-      clearInterval(tickTimer); tickTimer = null;
-      $("expiredNote").hidden = false;
-      // Idle auto-refresh: if the screen is just sitting visible, fetch a fresh
-      // code once so a stale QR never lingers. Any tap/typing cancels it.
-      if (!autoRefreshed && document.visibilityState === "visible") {
-        autoRefreshed = true;
-        setTimeout(function(){
-          if (!tickTimer && document.visibilityState === "visible") fetchCred();
-        }, 5000);
-      }
-    }
-  };
-  update();
-  tickTimer = setInterval(update, 1000);
-}
-document.addEventListener("visibilitychange", function(){
-  if (!document.hidden && !tickTimer && !autoRefreshed && expTs) {
-    autoRefreshed = true; fetchCred();
-  }
-});
-
-function fmtTime(s){
-  var m = Math.floor(s / 60), r = s % 60;
-  return m + ":" + (r < 10 ? "0" : "") + r;
-}
-
-async function postIssue(body, btn){
-  var res;
-  try {
-    res = await fetch(issuer() + "/issue", {
-      method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify(body)});
-  } catch (e) { showError("Can't reach the issuer. Check the Issuer URL and your connection."); return null; }
-  if (!res.ok) { showError(friendlyStatus(res)); return null; }
-  try { return await readJson(res); }
-  catch (e) { showError("The issuer answered something unexpected."); return null; }
-}
-
-async function fetchCred(){
-  var btn = $("refreshBtn"); setBusy(btn, true);
-  var getBtn = $("getBtn"); setBusy(getBtn, true, "Get my ID");
-  var data = await postIssue({user_id: $("uid").value, verifier_id: $("shop").value});
-  setBusy(btn, false); setBusy(getBtn, false, "Get my ID");
-  if (data) showCred(data);
-}
-
-async function answerChallenge(){
-  var nonce = $("nonceInput").value.trim();
-  if (!nonce) { showError("Paste or scan the shop's challenge code first."); return; }
-  var btn = $("answerBtn"); setBusy(btn, true, "Answer challenge");
-  var data = await postIssue({user_id: $("uid").value,
-    verifier_id: $("shop").value, nonce: nonce});
-  setBusy(btn, false, "Answer challenge");
-  if (data) { showCred(data); $("nonceInput").value = ""; }
-}
-
-function copyJson(){
-  var t = $("rawJson").textContent;
-  if (navigator.clipboard) navigator.clipboard.writeText(t).catch(function(){});
-}
-
-async function toggleChallengeScan(){
-  var video = $("scanVideo"), hint = $("scanHint"), btn = $("scanBtn");
-  if (challengeScanner && challengeScanner.isScanning()) {
-    challengeScanner.stop(); video.hidden = true; hint.hidden = true;
-    btn.textContent = "Scan shop QR"; return;
-  }
-  if (!window.QRScanner) { showError("Scanner unavailable offline — paste the code instead."); return; }
-  challengeScanner = QRScanner.createScanner({
-    video: video,
-    onResult: function (text) {
-      var nonce = window.ScanUtil ? ScanUtil.parseChallenge(text) : text.trim();
-      if (!nonce) { showError("That QR doesn't look like a shop challenge."); return; }
-      challengeScanner.stop(); video.hidden = true; hint.hidden = true;
-      btn.textContent = "Scan shop QR";
-      $("nonceInput").value = nonce;
-      showOk("Challenge captured — tap Answer challenge.");
-    },
-    onNotice: function (msg) { showError(msg); }
-  });
-  var backend = challengeScanner.backend();
-  $("scanBackend").textContent = backend === "native" ? "(fast scan)" :
-    backend === "jsqr" ? "(compatibility scan)" : "";
-  video.hidden = false; hint.hidden = false;
-  btn.textContent = "Stop scanning";
-  var r = await challengeScanner.start();
-  if (!r.ok) {
-    video.hidden = true; hint.hidden = true; btn.textContent = "Scan shop QR";
-    showError({
-      insecure: "Camera needs HTTPS or localhost — paste the code instead.",
-      denied: "Camera blocked. Allow access or paste the code instead.",
-      busy: "Camera is in use by another app.",
-      missing: "No camera found — paste the code instead.",
-      unsupported: "This browser can't scan — paste the code instead."
-    }[r.reason] || "Camera unavailable — paste the code instead.");
-  }
-}
-
-async function fetchCode(){
-  clearError();
-  var q = new URLSearchParams({user_id: $("uid").value, verifier_id: $("shop").value});
-  var res;
-  try { res = await fetch(issuer() + "/otp?" + q.toString()); }
-  catch (e) { showError("Can't reach the issuer. Check the Issuer URL and your connection."); return; }
-  if (!res.ok) { showError(friendlyStatus(res)); return; }
-  var data;
-  try { data = await readJson(res); }
-  catch (e) { showError("The issuer answered something unexpected."); return; }
-  if (!data.code) { showError("No code returned for this ID."); return; }
-  showGroupedCode(data.code);
-  startOtpCountdown();
-}
-
-function showGroupedCode(code){
-  $("otpCode").textContent = code.slice(0, 3) + " " + code.slice(3);
-}
-
-function startOtpCountdown(){
-  if (otpTimer) clearInterval(otpTimer);
-  var update = function(){
-    var now = Math.floor(Date.now() / 1000);
-    var left = 30 - (now % 30);
-    $("otpTtl").textContent = "Refreshes in " + left + "s — read it quickly.";
-    if (left === 30) fetchCode();
-  };
-  update();
-  otpTimer = setInterval(update, 1000);
-}
-</script>
+<script src="./app.js"></script>
 </body>
 </html>

@@ -4,59 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Shop check — {{ verifier }}</title>
-<script src="/static/qrcode-lib.js" defer></script>
-<script src="/static/scanutil.js" defer></script>
-<script src="/static/scanner.js" defer></script>
-<style>
-:root{
-  --bg:#ffffff; --fg:#111827; --muted:#6b7280; --card:#f3f4f6;
-  --accent:#1d4ed8; --accent-fg:#ffffff; --ok:#047857; --ok-bg:#d1fae5;
-  --no:#b91c1c; --no-bg:#fee2e2; --border:#d1d5db; --radius:12px; --tap:48px;
-  color-scheme:light dark;
-}
-@media (prefers-color-scheme:dark){
-  :root{--bg:#111827; --fg:#f9fafb; --muted:#9ca3af; --card:#1f2937;
-    --accent:#60a5fa; --accent-fg:#111827; --ok:#34d399; --ok-bg:#064e3b;
-    --no:#f87171; --no-bg:#7f1d1d; --border:#374151;}
-}
-*{box-sizing:border-box}
-body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
-  background:var(--bg); color:var(--fg); margin:0; padding:0 1rem 3rem;
-  max-width:640px; margin-inline:auto;}
-h1{font-size:1.3rem; margin:1.2rem 0 .4rem}
-.badges{display:flex; gap:.5rem; flex-wrap:wrap; margin:.4rem 0 1rem}
-.badge{font-size:.85rem; border:1px solid var(--border); border-radius:999px; padding:.3rem .8rem;}
-.badge.ok{border-color:var(--ok); color:var(--ok); font-weight:700}
-.badge.bad{border-color:var(--no); color:var(--no); font-weight:700}
-button{min-height:var(--tap); font-size:1rem; border-radius:var(--radius);
-  border:1px solid var(--border); background:var(--card); color:var(--fg);
-  padding:.6rem 1.1rem; cursor:pointer;}
-button.primary{background:var(--accent); border-color:var(--accent); color:var(--accent-fg);
-  font-weight:700; width:100%;}
-button:disabled{opacity:.5; cursor:wait}
-button:focus-visible, textarea:focus-visible, input:focus-visible{outline:3px solid var(--accent); outline-offset:2px;}
-textarea{width:100%; min-height:96px; font-size:.85rem; border-radius:8px;
-  border:1px solid var(--border); background:var(--bg); color:var(--fg); padding:.5rem;}
-#video{width:100%; border-radius:var(--radius); background:#000; display:block}
-#challengeQR{width:132px; height:132px; background:#fff; border-radius:8px;}
-#result{border-radius:var(--radius); padding:2rem 1rem; text-align:center; margin:1rem 0; display:none}
-#result.show{display:block}
-#result.yes{background:var(--ok-bg); border:3px solid var(--ok)}
-#result.no{background:var(--no-bg); border:3px solid var(--no)}
-#resultIcon{font-size:3.4rem; line-height:1}
-#resultWord{font-size:2.6rem; font-weight:900; margin:.3rem 0}
-#resultWhy{font-size:1.05rem}
-#msg{min-height:1.4em; font-weight:600; margin:.5rem 0}
-.card{background:var(--card); border:1px solid var(--border); border-radius:var(--radius); padding:.9rem; margin:.8rem 0}
-.card h2{font-size:1.02rem; margin:.1rem 0 .6rem}
-.muted{color:var(--muted); font-size:.9rem}
-.mono{font-family:ui-monospace,Menlo,Consolas,monospace; word-break:break-all}
-table{width:100%; border-collapse:collapse; font-size:.9rem}
-td,th{border-bottom:1px solid var(--border); padding:.4rem .2rem; text-align:left}
-.row{display:flex; gap:.5rem; flex-wrap:wrap; margin-top:.6rem}
-.challengeRow{display:flex; gap:.8rem; align-items:center; flex-wrap:wrap}
-@media (prefers-reduced-motion:reduce){ *{transition:none !important; animation:none !important;} }
-</style>
+<link rel="manifest" href="/app.webmanifest">
+<meta name="theme-color" content="#047857">
+<link rel="stylesheet" href="/static/shop.css">
+<script src="/static/vendor/qrcode-lib.js" defer></script>
+<script src="/static/vendor/scanutil.js" defer></script>
+<script src="/static/vendor/scanner.js" defer></script>
 </head>
 <body>
 <h1>Shop check — {{ verifier }}</h1>
@@ -69,6 +22,7 @@ td,th{border-bottom:1px solid var(--border); padding:.4rem .2rem; text-align:lef
   <div id="resultIcon" aria-hidden="true"></div>
   <div id="resultWord"></div>
   <div id="resultWhy"></div>
+  <p class="muted">Tap to continue</p>
 </div>
 <p id="msg" aria-live="polite"></p>
 
@@ -77,26 +31,26 @@ td,th{border-bottom:1px solid var(--border); padding:.4rem .2rem; text-align:lef
   <div id="videoWrap" hidden>
     <video id="video" playsinline muted aria-label="Camera viewfinder"></video>
     <div class="row">
-      <button id="scanBtn" onclick="toggleScan()">Start camera</button>
-      <button id="torchBtn" onclick="toggleTorch()" hidden>Torch: off</button>
-      <button id="switchBtn" onclick="switchCamera()" hidden>Switch camera</button>
+      <button id="scanBtn">Start camera</button>
+      <button id="torchBtn" hidden>Torch: off</button>
+      <button id="switchBtn" hidden>Switch camera</button>
     </div>
     <p class="muted" id="backendNote"></p>
   </div>
   <div id="noCamMsg" class="muted" hidden></div>
-  <label>Paste credential JSON instead
-    <textarea id="credInput" placeholder='{"v":1, …}' spellcheck="false"></textarea>
+  <label>Paste presentation JSON instead
+    <textarea id="credInput" placeholder='{"c":{…},"p":{…}}' spellcheck="false"></textarea>
   </label>
-  <div class="row"><button class="primary" id="verifyBtn" onclick="verifyPasted()">Check ID</button></div>
+  <div class="row"><button class="primary" id="verifyBtn">Check ID</button></div>
 </section>
 
 <section class="card" aria-label="Challenge">
-  <h2>2 · Challenge <span class="muted">(stops copied QRs — customer scans it)</span></h2>
+  <h2>2 · Challenge <span class="muted">(customer scans it — stops copied QRs)</span></h2>
   <div class="challengeRow">
     <canvas id="challengeQR" width="132" height="132" role="img" aria-label="Challenge QR code"></canvas>
     <div>
-      <p style="margin:.2rem 0">Code: <code class="mono" id="nonce">…</code></p>
-      <div class="row"><button onclick="freshChallenge()">New challenge</button></div>
+      <p class="tight">Code: <code class="mono" id="nonce">…</code></p>
+      <div class="row"><button id="nonceBtn">New challenge</button></div>
     </div>
   </div>
 </section>
@@ -107,217 +61,23 @@ td,th{border-bottom:1px solid var(--border); padding:.4rem .2rem; text-align:lef
   <tbody id="recentBody"><tr><td colspan="3" class="muted">None yet.</td></tr></tbody></table>
 </section>
 
-<p class="muted"><a href="/receipts">Receipts</a> · <a href="/receipts.csv">CSV export</a> · <a href="/healthz">Health</a></p>
+<details class="card" id="adminDrawer">
+  <summary>Shop admin (receipts + pairing)</summary>
+  <label>Admin token (kept in memory only)
+    <input id="adminToken" type="password" autocomplete="off" class="wide">
+  </label>
+  <div class="row">
+    <button id="receiptsBtn">View receipts</button>
+    <button id="csvBtn">Export CSV</button>
+  </div>
+  <div id="adminReceipts"></div>
+  <label>Pair with a signed bundle (paste JSON)
+    <textarea id="bundleInput" placeholder='{"v":…,"s":…}' spellcheck="false"></textarea>
+  </label>
+  <div class="row"><button id="syncBtn">Sync bundle</button></div>
+</details>
 
-<script>
-"use strict";
-/* textContent only — server data is never inserted as HTML. */
-var scanner = null, resetTimer = null;
-
-function $(id){ return document.getElementById(id); }
-function say(msg){ $("msg").textContent = msg; }
-
-var REASONS = {
-  OK: "Verified — over 18.",
-  OK_OTP: "Verified by fallback code.",
-  EXPIRED: "Credential expired, ask the customer to refresh.",
-  REPLAY: "Copied or reused QR.",
-  REVOKED: "This ID was revoked.",
-  BADSIG: "Invalid signature — possible forgery.",
-  NOT_ADULT: "Under 18.",
-  UNKNOWN_CHALLENGE: "Challenge expired — get a new one.",
-  MALFORMED: "Unreadable code — try again.",
-  TOO_LARGE: "Code too large to be valid.",
-  NO_TRUSTBUNDLE: "This checker isn't paired yet.",
-  BAD_OTP: "Wrong code — ask the customer to read it again.",
-  BAD_PAIRING_TOKEN: "Pairing locked.",
-  ROLLBACK: "Outdated trust data refused."
-};
-
-function showResult(ok, word, icon, why){
-  var box = $("result");
-  box.className = "show " + (ok ? "yes" : "no");
-  $("resultIcon").textContent = icon;
-  $("resultWord").textContent = word;
-  $("resultWord").style.color = ok ? "var(--ok)" : "var(--no)";
-  $("resultWhy").textContent = why;
-  if (resetTimer) clearTimeout(resetTimer);
-  resetTimer = setTimeout(function(){ box.className = ""; say("Ready to scan."); }, 6000);
-}
-
-async function api(path, opts){
-  var res = await fetch(path, opts);
-  var text = await res.text();
-  try { return {status: res.status, ok: res.ok, json: JSON.parse(text)}; }
-  catch (e) { return {status: res.status, ok: false, json: null}; }
-}
-
-async function refreshStatus(){
-  try {
-    var r = await api("/healthz");
-    var tb = $("trustBadge");
-    if (r.ok && r.json.trust) {
-      tb.textContent = "Trust bundle v" + r.json.v + " loaded";
-      tb.className = "badge ok";
-    } else {
-      tb.textContent = "Trust bundle missing — pair this checker";
-      tb.className = "badge bad";
-    }
-  } catch (e) {
-    $("trustBadge").textContent = "Trust: ?"; $("trustBadge").className = "badge";
-  }
-  var online = navigator.onLine;
-  var nb = $("netBadge");
-  nb.textContent = online ? "Online" : "Offline — checks still work";
-  nb.className = "badge " + (online ? "ok" : "bad");
-}
-window.addEventListener("online", refreshStatus);
-window.addEventListener("offline", refreshStatus);
-
-async function freshChallenge(auto){
-  try {
-    var r = await api("/challenge");
-    var nonce = r.json.nonce;
-    $("nonce").textContent = nonce;
-    if (window.QRScanner) QRScanner.drawQR($("challengeQR"), nonce);
-  } catch (e) {
-    if (!auto) say("Couldn't fetch a challenge — check the connection.");
-    $("nonce").textContent = "unavailable";
-  }
-}
-setInterval(function(){ freshChallenge(true); }, 120000);
-
-function currentNonce(){
-  var t = $("nonce").textContent;
-  return (t && t !== "…" && t !== "unavailable") ? t : "";
-}
-
-async function doVerify(credText){
-  var check = window.ScanUtil
-    ? ScanUtil.validateCredential(credText)
-    : {ok: true, cred: JSON.parse(credText)};
-  if (!check.ok) {
-    showResult(false, "NO", "✕",
-      check.error === "too-large" ? REASONS.TOO_LARGE
-      : "That doesn't look like an ID QR — keep scanning.");
-    return;
-  }
-  var btn = $("verifyBtn"); btn.disabled = true; say("Checking…");
-  try {
-    var res = await fetch("/verify", {method: "POST",
-      headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({cred: check.cred, nonce: currentNonce()})});
-    var text = await res.text(), j = null;
-    try { j = JSON.parse(text); } catch (e) {}
-    if (!j) showResult(false, "NO", "✕", "Checker gave an unclear answer. Try again.");
-    else if (j.result === "YES") showResult(true, "YES", "✓", REASONS[j.reason] || j.reason);
-    else showResult(false, "NO", "✕", REASONS[j.reason] || ("Refused (" + j.reason + ")."));
-  } catch (e) {
-    showResult(false, "NO", "✕", "Can't reach the checker. It may be restarting.");
-  } finally { btn.disabled = false; say(""); loadRecent(); }
-}
-
-function verifyPasted(){
-  var t = $("credInput").value.trim();
-  if (!t) { say("Paste the customer's code first, or start the camera."); return; }
-  doVerify(t);
-}
-
-/* ---- camera ---- */
-function scannerReady(){ return !!(window.QRScanner && window.ScanUtil); }
-
-function describeStartFailure(reason){
-  return {
-    insecure: "Camera needs HTTPS or localhost — paste the code instead (see README).",
-    denied: "Camera blocked. Allow access in the browser, or paste the code instead.",
-    busy: "Camera is in use by another app. Close it or paste the code instead.",
-    missing: "No camera found — paste the code instead.",
-    unsupported: "This browser can't scan — paste the code instead."
-  }[reason] || "Camera unavailable — paste the code instead.";
-}
-
-async function toggleScan(){
-  if (scanner && scanner.isScanning()) { stopScanUI(); return; }
-  if (!scannerReady()) { say(describeStartFailure("unsupported")); return; }
-  scanner = QRScanner.createScanner({
-    video: $("video"),
-    onResult: function (text) {
-      var check = ScanUtil.validateCredential(text);
-      if (!check.ok) {
-        say(check.error === "too-large" ? REASONS.TOO_LARGE
-          : "That doesn't look like an ID QR — keep scanning.");
-        return; // keep scanning
-      }
-      stopScanUI();
-      doVerify(text);
-    },
-    onNotice: function () {}
-  });
-  $("backendNote").textContent = scanner.backend() === "native"
-    ? "Fast native scan." : scanner.backend() === "jsqr"
-    ? "Compatibility scan (slower)." : "";
-  var cams = await scanner.refreshCameras();
-  $("switchBtn").hidden = cams.length < 2;
-  $("videoWrap").hidden = false;
-  var r = await scanner.start();
-  if (!r.ok) {
-    stopScanUI();
-    say(describeStartFailure(r.reason));
-    return;
-  }
-  $("scanBtn").textContent = "Stop camera";
-  $("torchBtn").hidden = !scanner.torchSupported();
-  say("Point the camera at the QR code.");
-}
-function stopScanUI(){
-  if (scanner) scanner.stop();
-  $("videoWrap").hidden = true;
-  $("scanBtn").textContent = "Start camera";
-  $("torchBtn").hidden = true;
-}
-async function toggleTorch(){
-  if (!scanner) return;
-  var on = await scanner.toggleTorch();
-  $("torchBtn").textContent = on ? "Torch: on" : "Torch: off";
-}
-async function switchCamera(){
-  if (!scanner) return;
-  if (!await scanner.nextCamera()) say("Couldn't switch camera.");
-  else if (!scanner.torchSupported()) $("torchBtn").hidden = true;
-}
-
-async function loadRecent(){
-  try {
-    var r = await api("/receipts");
-    if (!r.ok || !r.json.length) return;
-    var tb = $("recentBody");
-    while (tb.firstChild) tb.removeChild(tb.firstChild);
-    r.json.slice(0, 5).forEach(function(row){
-      var tr = document.createElement("tr");
-      [["time", new Date(row.ts * 1000).toLocaleTimeString()],
-       ["res", row.result],
-       ["mode", (row.q || "").split(":")[1] || "—"]].forEach(function(pair){
-        var td = document.createElement("td");
-        td.textContent = pair[1];
-        if (pair[0] === "res") td.style.color = pair[1] === "YES" ? "var(--ok)" : "var(--no)";
-        tr.appendChild(td);
-      });
-      tb.appendChild(tr);
-    });
-  } catch (e) { /* receipts optional on this screen */ }
-}
-
-(function init(){
-  var camOk = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
-  $("videoWrap").hidden = true;
-  var noCam = $("noCamMsg");
-  if (!camOk) { noCam.hidden = false; noCam.textContent = "No camera on this device — paste the code below."; }
-  else if (!window.isSecureContext) {
-    noCam.hidden = false;
-    noCam.textContent = "Camera needs HTTPS or localhost — serve securely or paste the code below.";
-  }
-  refreshStatus(); freshChallenge(); loadRecent();
-})();
-</script>
+<p class="muted"><a href="/receipts.csv">CSV</a> · <a href="/healthz">Health</a> · <a href="/status">Status</a></p>
+<script src="/static/shop.js"></script>
 </body>
 </html>

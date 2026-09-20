@@ -1,0 +1,9 @@
+:root{--bg:#ffffff; --fg:#111827; --muted:#6b7280;
+  --ok:#047857; --no:#b91c1c; --radius:12px; --tap:48px; color-scheme:light dark;}
+body{font-family:system-ui,sans-serif; background:var(--bg); color:var(--fg);
+  max-width:640px; margin:0 auto; padding:0 1rem 3rem;}
+button{min-height:var(--tap); border-radius:8px;}
+.card{border:1px solid var(--muted); border-radius:var(--radius); padding:.9rem; margin:.8rem 0}
+#result{font-size:2rem; font-weight:900; padding:1rem; text-align:center;}
+input.wide{width:100%}
+.tight{margin:.2rem 0}

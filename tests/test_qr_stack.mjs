@@ -1,6 +1,6 @@
 /* Node round-trip test for the vendored QR stack (no camera, no DOM).
- * Encodes with static/qrcode-lib.js, rasterizes by hand, decodes with
- * static/jsqr.min.js. A credential-sized payload must decode EXACTLY.
+ * Encodes with static/vendor/qrcode-lib.js, rasterizes by hand, decodes with
+ * static/vendor/jsqr.min.js. A presentation-sized payload must decode EXACTLY.
  * Run: node --test tests/test_qr_stack.mjs   (also wired into CI)
  */
 import { describe, it } from "node:test";
@@ -11,12 +11,13 @@ import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
+const vendor = path.join(root, "static");
 // Browser script: run in global scope so `var qrcode` attaches to globalThis.
-(0, eval)(fs.readFileSync(path.join(root, "static/qrcode-lib.js"), "utf8"));
+(0, eval)(fs.readFileSync(path.join(vendor, "qrcode-lib.js"), "utf8"));
 const require = createRequire(import.meta.url);
-const jsQR = require("../static/jsqr.min.js");
+const jsQR = require(path.join(vendor, "jsqr.min.js")); // absolute path: no resolution
 
-function rasterize(qr, scale = 8, quietModules = 4) {
+function rasterize(qr, scale = 6, quietModules = 4) {
   const n = qr.getModuleCount();
   const size = (n + quietModules * 2) * scale;
   const px = new Uint8ClampedArray(size * size * 4).fill(255);
@@ -37,27 +38,32 @@ function rasterize(qr, scale = 8, quietModules = 4) {
   return { px, size };
 }
 
+function qrDecode(text) {
+  const qr = globalThis.qrcode(0, "M");
+  qr.addData(text);
+  qr.make();
+  const { px, size } = rasterize(qr);
+  const out = jsQR(px, size, size);
+  assert.ok(out, "jsQR must detect the code");
+  return out.data;
+}
+
 describe("vendored QR stack", () => {
-  it("round-trips a credential-sized payload exactly", () => {
+  it("round-trips a presentation-sized payload exactly", () => {
     const text = JSON.stringify({
-      v: 1, iss: "NIMC-TEST-01", uid_p: "a3f9c1e2b4d5a607",
-      a: "over_18", r: 1, exp: 1999999999, n: "f".repeat(32), s: "Z".repeat(86)
+      c: {
+        v: 1, iss: "NIMC-TEST-01", sub: "ab".repeat(16), vid: "SHOP-A",
+        a: "over_18", r: 1, iat: 100, exp: 9999999999, cnf: "Z".repeat(86), s: "Y".repeat(86)
+      },
+      p: { n: "f".repeat(32), ts: 1999999999, sig: "Z".repeat(86) }
     });
-    assert.ok(text.length > 200, "payload should be realistically large");
-    const qr = globalThis.qrcode(0, "M");
-    qr.addData(text);
-    qr.make();
-    const { px, size } = rasterize(qr);
-    const out = jsQR(px, size, size);
-    assert.ok(out, "jsQR must detect the code");
-    assert.equal(out.data, text);
+    assert.ok(text.length > 400, "payload should be realistically large");
+    assert.ok(text.length < 2048, "payload must fit the 2048-byte cap");
+    assert.equal(qrDecode(text), text);
   });
 
-  it("round-trips a short challenge nonce", () => {
-    const qr = globalThis.qrcode(0, "M");
-    qr.addData("9f3a2b1c4d5e6f70");
-    qr.make();
-    const { px, size } = rasterize(qr);
-    assert.equal(jsQR(px, size, size).data, "9f3a2b1c4d5e6f70");
+  it("round-trips a short challenge payload", () => {
+    const text = JSON.stringify({ n: "9f3a2b1c4d5e6f70", vid: "SHOP-A", exp: 9999 });
+    assert.equal(qrDecode(text), text);
   });
 });

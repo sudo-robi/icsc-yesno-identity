@@ -1,299 +1,268 @@
-"""Verifier service routes (thin Flask layer over verifier.service / verifier.repo).
+"""Verifier service routes (thin Flask layer over verifier.services/repo).
 
-Offline-first: caches trustbundle.json, zero issuer calls at check time.
-
-Module globals (DB, TRUST, SECRETS_PATH, KEYS_DIR, VERIFIER_ID, NONCE_TTL_SEC,
-_nonces) are the documented override points used by tests — wrappers below
-read them at call time and pass them explicitly into the service layer.
+Env: VERIFIER_DB, TRUSTBUNDLE_PATH, OTP_SECRETS_PATH, VERIFIER_ID, ADMIN_TOKEN
+(required outside debug), OTP_ENABLED, NONCE_TTL_SEC, RATELIMIT_*, BEHIND_PROXY.
 """
 import json
-import logging
 import os
 import time
 
-from flask import Flask, jsonify, render_template, request, Response, send_from_directory
-from flask_limiter import Limiter
-from flask_limiter.util import get_remote_address
+from flask import jsonify, render_template, request, Response, send_from_directory
 from marshmallow import Schema, fields, ValidationError
 
 from shared import config
-from shared.crypto import CLOCK_SKEW_SEC, gen_nonce
-from shared.schemas import CRED_MAX_BYTES, TRUSTBUNDLE_REQUIRED_FIELDS
-from verifier import repo, service
+from shared.crypto import key_fingerprint
+from shared.errors import err
+from verifier import repo, services
+from shared.web import admin_required, base_logger, log_event, make_app, require_admin_configured
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
-log = logging.getLogger("verifier")
+log = base_logger("verifier")
+
+require_admin_configured()
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-DB = config.file_path(config.VERIFIER_DB_ENV, "receipts.db", BASE)
-TRUST = config.file_path(config.TRUSTBUNDLE_ENV, "trustbundle.json", BASE)
-VERIFIER_ID = os.environ.get(config.VERIFIER_ID_ENV, config.VERIFIER_ID_DEFAULT)
+DB = config.VERIFIER_DB
+VERIFIER_ID = config.VERIFIER_ID
+SECRETS_PATH = config.OTP_SECRETS_PATH
 
-app = Flask(__name__,
-            static_folder=os.path.join(os.path.dirname(BASE), "static"))
-# The repo-level static/ dir (vendored QR libs + scanner) is served at
-# /static/* at root AND under every PrefixStrip subpath (/verifier, /holder).
-limiter = Limiter(get_remote_address, app=app,
-                  default_limits=config.DEFAULT_LIMITS,
-                  storage_uri=os.environ.get(config.RATELIMIT_STORAGE_ENV,
-                                             config.RATELIMIT_STORAGE_DEFAULT))
-_nonces: dict[str, float] = {}
-NONCE_TTL_SEC = config.NONCE_TTL_SEC
-
-SECRETS_PATH = config.file_path(config.OTP_SECRETS_ENV, "otp_secrets.json", BASE)
-
-KEYS_DIR = os.environ.get(config.RECEIPT_KEY_DIR_ENV,
-                          os.path.join(os.path.dirname(BASE), "keys"))
+app, limiter = make_app("verifier", config.RATELIMIT_DEFAULT)
 
 
 class VerifySchema(Schema):
-    """POST /verify body."""
-    cred = fields.Dict(required=True)
-    nonce = fields.Str(validate=lambda s: len(s) <= 64, load_default="")
+    """POST /verifier/verify body: credential + holder proof (both required)."""
+    c = fields.Dict(required=True)
+    p = fields.Dict(required=True)
 
 
-# --- compat wrappers (used by tests; read globals at call time) ---
-def db():
-    """Open the receipts database."""
-    return repo.connect(DB)
+def _trust() -> dict | None:
+    return repo.get_bundle(DB)
 
 
-def init_db():
-    """Create receipt + replay tables (idempotent)."""
-    repo.init_db(DB)
-
-
-def trust() -> dict | None:
-    """Cached trust bundle, or None before pairing."""
-    if not os.path.exists(TRUST):
-        return None
-    with open(TRUST) as f:
-        return json.load(f)
-
-
-def _receipt_key() -> str:
-    """HMAC key for the receipt chain (persisted under KEYS_DIR)."""
-    return service.load_receipt_key(KEYS_DIR)
-
-
-def _chain_hash(prev_hash: str, ts: int, verifier_id: str, q: str,
-                result: str, nonce_hash: str, sig_hash: str) -> str:
-    """One chain link (re-exported from verifier.service for tests/auditors)."""
-    return service.chain_entry(prev_hash, ts, verifier_id, q, result,
-                               nonce_hash, sig_hash, _receipt_key())
-
-
-def _prune_nonces(now: float | None = None) -> None:
-    """Drop expired challenges from the live registry."""
-    service.prune_nonces(_nonces, time.time() if now is None else now,
-                         NONCE_TTL_SEC)
-
-
-def _load_secrets() -> dict:
-    """Demo-only OTP shared secrets (separate store, never the trustbundle)."""
+def _secrets() -> dict:
     if not os.path.exists(SECRETS_PATH):
         return {}
     with open(SECRETS_PATH) as f:
-        return json.load(f)
+        data = json.load(f)
+    return data if isinstance(data, dict) else {}
 
 
-def decide(cred: dict, nonce: str) -> tuple[str, str]:
-    """Verify one credential against cached trust (see verifier.service)."""
-    return service.decide_decision(
-        cred, nonce, trust=trust(), nonces=_nonces, now=time.time(),
-        ttl=NONCE_TTL_SEC, skew=CLOCK_SKEW_SEC, max_bytes=CRED_MAX_BYTES)
-
-
-def log_receipt(q: str, result: str, nonce: str | None, sig) -> str:
-    """Append one PII-free receipt; returns the entry hash."""
-    if result not in ("YES", "NO"):
-        raise ValueError(f"unknown result: {result!r}")
-    key = _receipt_key()
+def _receipt(q: str, result: str, reason: str) -> str:
+    """Append a PII-free receipt: no raw nonce/credential/code, and no
+    derivatives of them either — only the public outcome fields are chained."""
+    key = services.load_receipt_key(DB)
     ts = int(time.time())
-    nonce_hash = service.peppered(nonce or "-", key)
-    sig_hash = service.peppered(json.dumps(sig, sort_keys=True)
-                                if isinstance(sig, dict) else str(sig), key)
     return repo.append_receipt(
-        DB, ts=ts, verifier_id=VERIFIER_ID, q=q, result=result,
-        nonce_hash=nonce_hash, sig_hash=sig_hash,
-        entry_hash_of=lambda prev: service.chain_entry(
-            prev, ts, VERIFIER_ID, q, result, nonce_hash, sig_hash, key))
+        DB, ts=ts, verifier_id=VERIFIER_ID, q=q, result=result, reason=reason,
+        entry_hash_of=lambda prev: services.chain_entry(
+            prev, ts, VERIFIER_ID, q, result, reason, key))
 
 
 @app.get("/healthz")
 def healthz():
-    """Liveness probe (also reports pairing state + bundle version)."""
-    paired = trust() or {}
+    """Liveness probe."""
+    paired = _trust()
     return {"ok": True, "verifier": VERIFIER_ID, "trust": bool(paired),
-            "v": paired.get("v")}
+            "v": (paired or {}).get("v")}
+
+
+@app.get("/status")
+def status():
+    """Public pairing status: bundle version + iss + fingerprint + expiry."""
+    paired = _trust()
+    if not paired:
+        return {"paired": False}
+    from issuer.services import fingerprint as _fp
+
+    return {"paired": True, "bundle_v": paired.get("v"), "iss": paired.get("iss"),
+            "fingerprint": _fp(paired.get("pub", "")),
+            "bundle_exp": paired.get("exp")}
 
 
 @app.get("/challenge")
+@limiter.limit(config.RATELIMIT_SENSITIVE)
 def challenge():
-    """Issue a fresh single-use challenge nonce."""
-    _prune_nonces()
-    nonce = gen_nonce()
-    _nonces[nonce] = time.time()
-    return {"nonce": nonce, "verifier": VERIFIER_ID}
+    """Mint a fresh single-use challenge {n, vid, exp} for the shop QR."""
+    now = int(time.time())
+    issued = services.mint_challenge(verifier_id=VERIFIER_ID, now=now,
+                                    ttl_sec=config.NONCE_TTL_SEC)
+    repo.prune_nonces(DB, now - config.NONCE_TTL_SEC)
+    repo.add_nonce(DB, issued["n"], VERIFIER_ID, now, issued["exp"])
+    return jsonify(issued)
 
 
 @app.post("/verify")
-@limiter.limit(config.LIMIT_VERIFY)
+@limiter.limit(config.RATELIMIT_SENSITIVE)
 def verify():
-    """Verify a credential; responds with YES/NO + machine reason + mode."""
+    """Verify a {credential, proof} presentation. Always YES/NO + reason."""
     try:
         args = VerifySchema().load(request.get_json(force=True))
     except ValidationError as e:
-        return {"result": "NO", "reason": "MALFORMED", "detail": str(e)}, 400
-    cred, nonce = args["cred"], args.get("nonce", "")
-    if not isinstance(cred, dict):
+        return {"result": "NO", "reason": "MALFORMED", "detail": str(e.messages)}, 400
+    except Exception:
         return {"result": "NO", "reason": "MALFORMED"}, 400
-    # replay: static QR reused with a *different* fresh nonce fails unless holder re-signed
-    result, reason = decide(cred, nonce)
-    if not service.check_reason(reason):  # internal contract drift, never caller input
-        log.error(json.dumps({"event": "reason_drift", "reason": reason}))
+    cred, proof = args["c"], args["p"]
+
+    def consume(nonce: str, min_issued: float, now_ts: float):
+        row = repo.consume_nonce(DB, nonce, int(min_issued), int(now_ts))
+        return dict(row) if row else None
+
+    result, reason = services.decide(
+        cred, proof, len(request.data), trust=_trust(), verifier_id=VERIFIER_ID,
+        now=time.time(), consume_nonce=consume)
+    if not services.check_reason(reason):  # internal drift, never caller input
+        log_event(log, "reason_drift", reason=reason)
         return {"result": "NO", "reason": "MALFORMED"}, 500
-    mode = "challenge" if nonce else "static"
-    eh = log_receipt(f"over_18:{mode}", result, nonce or str(cred.get("n")),
-                     cred.get("s"))
-    log.info(json.dumps({"event": "verify", "result": result,
-                         "reason": reason, "receipt": eh}))
-    return jsonify({"result": result, "reason": reason, "mode": mode, "receipt": eh})
+    mode = "proof"
+    receipt = _receipt(f"over_18:{mode}", result, reason)
+    log_event(log, "verify", result=result, reason=reason)
+    return jsonify({"result": result, "reason": reason, "mode": mode,
+                    "receipt": receipt})
 
 
 @app.post("/verify_code")
-@limiter.limit(config.LIMIT_VERIFY)
+@limiter.limit(config.RATELIMIT_SENSITIVE)
 def verify_code():
-    """Feature-phone path: 6-digit single-use code. Demo OTP secrets live in the
-    SEPARATE secrets store (never in the trustbundle). Codes expire per 30s step;
-    replay memory is keyed by (code, step) and pruned to the grace window."""
-    import secrets as _rand
-
-    data = request.get_json(force=True)
+    """Feature-phone OTP path (flagged). Code identifies the holder sub, then
+    bundle status lists are enforced. Invalid codes are never recorded."""
+    if not config.OTP_ENABLED:
+        return err("OTP_DISABLED"), 404
+    try:
+        data = request.get_json(force=True)
+    except Exception:
+        return {"result": "NO", "reason": "MALFORMED"}, 400
     if not isinstance(data, dict):
         return {"result": "NO", "reason": "MALFORMED"}, 400
     code = str(data.get("code", ""))
-    # demo check: code must match one of the known secrets for current/prev step.
-    # The match also identifies the holder pseudonym, so status (revoked/minor)
-    # from the signed bundle is enforced — a bare valid code is never enough.
-    # Invalid codes are never recorded; validated codes are single-use per step.
     step = int(time.time() // config.OTP_STEP_SEC)
-    repo.prune_codes(DB, step - config.USED_CODE_STEPS_KEPT + 1)
-    matched_uid = service.match_otp_code(_load_secrets(), code, VERIFIER_ID, step)
-    if matched_uid is None:
-        eh = log_receipt("over_18:otp", "NO", _rand.token_hex(16), "otp-bad")
-        return {"result": "NO", "reason": "BAD_OTP", "receipt": eh}
-    if repo.is_code_used(DB, code, step):
-        eh = log_receipt("over_18:otp", "NO", _rand.token_hex(16), "otp-reuse")
-        return {"result": "NO", "reason": "REPLAY"}
-    repo.mark_code_used(DB, code, step, int(time.time()))
-    result, reason = service.otp_status(matched_uid, trust() or {})
-    # Receipt carries a fresh random token, never any derivative of the raw code,
-    # so public receipts cannot be brute-forced back into OTP codes.
-    eh = log_receipt("over_18:otp", result, _rand.token_hex(16), "otp")
-    return {"result": result, "reason": reason, "receipt": eh}
-
-
-@app.get("/receipts")
-def receipts():
-    """Newest-first PII-free receipts (shop UI + auditor)."""
-    return jsonify(repo.list_receipts(DB))
-
-
-@app.get("/receipts.csv")
-def receipts_csv():
-    """Full log as CSV."""
-    out = ["id,ts,verifier,q,result,nonce_hash,sig_hash,prev_hash,entry_hash"]
-    out += [",".join(map(str, [r["id"], r["ts"], r["verifier_id"], r["q"],
-                               r["result"], r["nonce_hash"], r["sig_hash"],
-                               r["prev_hash"], r["entry_hash"]]))
-            for r in repo.all_receipts(DB)]
-    return Response("\n".join(out), mimetype="text/csv")
+    repo.prune_codes(DB, step - config.OTP_GRACE_STEPS)
+    matched = services.match_otp_code(_secrets(), code, VERIFIER_ID, step)
+    if matched is None:
+        receipt = _receipt("over_18:otp", "NO", "BAD_OTP")
+        return {"result": "NO", "reason": "BAD_OTP", "receipt": receipt}
+    if repo.is_code_used(DB, matched, step):
+        receipt = _receipt("over_18:otp", "NO", "UNKNOWN_CHALLENGE")
+        return {"result": "NO", "reason": "UNKNOWN_CHALLENGE", "receipt": receipt}
+    repo.mark_code_used(DB, matched, step, int(time.time()))
+    result, reason = services.otp_status(matched, _trust() or {})
+    receipt = _receipt("over_18:otp", result, reason)
+    log_event(log, "verify_code", result=result, reason=reason)
+    return {"result": result, "reason": reason, "receipt": receipt}
 
 
 @app.post("/sync")
+@admin_required
 def sync():
-    """One-time pairing (USB/QR): cache the issuer's SIGNED trust bundle.
-    Public material goes to the trustbundle; any bundled demo OTP secrets are
-    split out into the separate secrets store.
-    Auth: if PAIRING_TOKEN env is set, the caller must present it (body field
-    `pairing_token` or `X-Pairing-Token` header), else 403 — otherwise anyone
-    reaching the verifier could swap its trusted keys. Unset = open pairing
-    for local demos (logged as a warning).
-    Trust: first sync is TOFU (pins the key, logged). Later syncs must carry a
-    signature from the pinned key AND a version >= the pinned one, else 409 —
-    this kills rollback/swap attacks."""
-    data = request.get_json(force=True)
+    """Pair (or re-pair) with a signed issuer bundle. First sync is TOFU: the
+    key fingerprint is returned for out-of-band operator confirmation."""
+    try:
+        data = request.get_json(force=True)
+    except Exception:
+        return err("MALFORMED"), 400
     if not isinstance(data, dict):
-        return {"result": "NO", "reason": "MALFORMED"}, 400
-    required = os.environ.get(config.PAIRING_TOKEN_ENV)
-    if required:
-        presented = data.get("pairing_token") or request.headers.get("X-Pairing-Token")
-        if not service.pairing_ok(presented, required):
-            log.warning(json.dumps({"event": "sync_rejected"}))
-            return {"result": "NO", "reason": "BAD_PAIRING_TOKEN"}, 403
-    else:
-        log.warning(json.dumps({"event": "sync_open_mode",
-                                "note": "set PAIRING_TOKEN to lock pairing"}))
-    tb = dict(data)
-    shape_error = service.validate_bundle(tb)
-    if shape_error:
-        return {"result": "NO", "reason": shape_error,
-                "detail": f"needs {sorted(TRUSTBUNDLE_REQUIRED_FIELDS)}"}, 400
-    pinned = trust()
-    sig = tb.pop("s", None)
-    # The signature covers issuer material only — operator-supplied extras
-    # (pairing token, locally provisioned OTP secrets) are excluded so they
-    # can ride along without breaking the issuer signature.
-    sig_body = service.bundle_sig_body(tb)
-    if pinned and pinned.get("pubkey_hex"):
-        if not sig or not service.verify_bundle_sig(sig_body, sig, pinned["pubkey_hex"]):
-            log.warning(json.dumps({"event": "sync_bad_signature"}))
-            return {"result": "NO", "reason": "BADSIG"}, 409
-        if tb["v"] < pinned.get("v", 0):
-            log.warning(json.dumps({"event": "sync_rollback",
-                                    "got": tb["v"], "pinned": pinned.get("v")}))
-            return {"result": "NO", "reason": "ROLLBACK"}, 409
-    else:
-        log.warning(json.dumps({"event": "sync_tofu", "iss": tb.get("iss")}))
-    if sig is not None:
-        tb["s"] = sig
-    secrets = tb.pop("otp_secrets", None)
-    tb.pop("pairing_token", None)
-    with open(TRUST, "w") as f:
-        json.dump(tb, f, indent=2)
-    if secrets is not None:
-        with open(SECRETS_PATH, "w") as f:
-            json.dump(secrets, f, indent=2)
-    return {"ok": True, "verifier": VERIFIER_ID}
+        return err("MALFORMED"), 400
+    bundle = data.get("bundle", data)
+    pinned = _trust()
+    accepted, reason = services.check_bundle(bundle, pinned=pinned, now=time.time())
+    if not accepted and reason in ("BADSIG", "ROLLBACK", "ISSUER_MISMATCH"):
+        log_event(log, "sync_rejected", reason=reason or "unknown")
+        return err(reason or "BADSIG"), 409
+    if not accepted:
+        return err("MALFORMED", "bundle shape"), 400
+    if pinned is None or not pinned.get("pub"):
+        repo.save_bundle(DB, bundle)
+        log_event(log, "sync_tofu", iss=bundle.get("iss"), v=bundle.get("v"))
+        return {"ok": True, "tofu": True, "fingerprint": key_fingerprint(bundle["pub"]),
+                "note": "confirm fingerprint out-of-band"}, 200
+    repo.save_bundle(DB, bundle)
+    log_event(log, "sync_ok", v=bundle.get("v"))
+    return {"ok": True, "v": bundle.get("v")}
+
+
+@app.post("/admin/otp-secrets")
+@admin_required
+def provision_otp_secrets():
+    """Store operator-provisioned OTP secrets (0600 file, never the bundle)."""
+    try:
+        data = request.get_json(force=True)
+    except Exception:
+        return err("MALFORMED"), 400
+    if not isinstance(data, dict) or not isinstance(data.get("secrets"), dict):
+        return err("MALFORMED"), 400
+    with open(SECRETS_PATH, "w") as f:
+        json.dump(data["secrets"], f, indent=2)
+    try:
+        os.chmod(SECRETS_PATH, 0o600)
+    except OSError:
+        pass
+    return {"ok": True, "count": len(data["secrets"])}
+
+
+def _signed_head():
+    rows = repo.all_receipts(DB)
+    key = services.load_receipt_key(DB)
+    if not rows:
+        return None, key
+    head = rows[-1]["entry_hash"]
+    ts = int(time.time())
+    sig = services.sign_head(key, head, ts)
+    return {"head": head, "ts": ts, "sig": sig}, key
+
+
+@app.get("/receipts")
+@admin_required
+def receipts():
+    """PII-free receipts + signed chain head (admin only)."""
+    head, _key = _signed_head()
+    rows = repo.list_receipts(DB)
+    pub = services.receipt_pub(DB)
+    return jsonify({"rows": rows, "head": head, "receipt_pub": pub})
+
+
+@app.get("/receipts.csv")
+@admin_required
+def receipts_csv():
+    """CSV export (fields escaped) + signed head."""
+    import csv
+    import io
+
+    head, _key = _signed_head()
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["id", "ts", "verifier_id", "q", "result", "reason",
+                     "prev_hash", "entry_hash"])
+    for row in repo.all_receipts(DB):
+        writer.writerow([row["id"], row["ts"], row["verifier_id"], row["q"],
+                         row["result"], row["reason"],
+                         row["prev_hash"], row["entry_hash"]])
+    writer.writerow([])
+    writer.writerow(["head", (head or {}).get("head"), (head or {}).get("ts"),
+                     (head or {}).get("sig")])
+    writer.writerow(["receipt_pub", services.receipt_pub(DB)])
+    return Response(buf.getvalue(), mimetype="text/csv")
+
+
+@app.get("/sw-shop.js")
+def shop_sw():
+    """Shop service worker (must live at root scope to cover /)."""
+    return send_from_directory(os.path.join(BASE, "static"), "sw-shop.js")
+
+
+@app.get("/app.webmanifest")
+def shop_manifest():
+    """Shop PWA manifest."""
+    return send_from_directory(os.path.join(BASE, "static"), "app.webmanifest")
 
 
 @app.get("/")
 def index():
-    """Shop screen (simple enough for a non-technical operator)."""
+    """Shop screen (full UI lands in Phase E; paste flow works now)."""
     return render_template("verifier.html", verifier=VERIFIER_ID,
-                           has_trust=bool(trust()))
+                           paired=bool(_trust()))
 
 
-init_db()  # import-safe (idempotent): needed for gunicorn/Vercel
-
-
-# Dual hosting: serve at root AND under /verifier (Vercel services subpath).
-# Assigned here (not after the __main__ guard) so local runs match deploys.
-from shared.wsgi import PrefixStrip as _PS  # noqa: E402
-app.wsgi_app = _PS(app.wsgi_app, ["/verifier"])
-if config.BEHIND_PROXY:  # Render/Vercel terminate TLS at the edge
-    from werkzeug.middleware.proxy_fix import ProxyFix as _PF  # noqa: E402
-    app.wsgi_app = _PF(app.wsgi_app, x_for=1, x_proto=1)
-
-
-@app.get("/holder/")
-def holder_page():
-    """Serve the holder web page same-origin (used on hosted deployments)."""
-    holder_dir = os.path.join(os.path.dirname(BASE), "holder")
-    return send_from_directory(holder_dir, "index.html")
+repo.init_db(DB)
 
 
 if __name__ == "__main__":  # pragma: no cover - dev entrypoint
-    init_db()
-    app.run(port=int(os.environ.get("PORT", 5002)), debug=False)
+    repo.init_db(DB)
+    app.run(port=int(os.environ.get("PORT", 5002)), debug=config.DEBUG)

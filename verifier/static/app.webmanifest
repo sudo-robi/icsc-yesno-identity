@@ -1,0 +1,13 @@
+{
+  "name": "Shop check — Yes/No",
+  "short_name": "Shop check",
+  "description": "Verify customer age with a yes/no, offline.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#047857",
+  "icons": [
+    {"src": "/static/icon.svg", "sizes": "any", "type": "image/svg+xml"}
+  ]
+}

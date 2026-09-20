@@ -3,110 +3,43 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Issuer — {{ iss }}</title>
-<style>
-:root{--bg:#ffffff; --fg:#111827; --muted:#6b7280; --card:#f3f4f6;
-  --accent:#1d4ed8; --accent-fg:#ffffff; --ok:#047857; --no:#b91c1c;
-  --border:#d1d5db; --radius:12px; --tap:48px; color-scheme:light dark;}
-@media (prefers-color-scheme:dark){
-  :root{--bg:#111827; --fg:#f9fafb; --muted:#9ca3af; --card:#1f2937;
-    --accent:#60a5fa; --accent-fg:#111827; --ok:#34d399; --no:#f87171; --border:#374151;}
-}
-body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
-  background:var(--bg); color:var(--fg); max-width:720px; margin:0 auto; padding:0 1rem 3rem;}
-h1{font-size:1.3rem} h2{font-size:1.05rem; margin-top:1.4rem}
-code{background:var(--card); border:1px solid var(--border); border-radius:6px;
-  padding:.1rem .35rem; word-break:break-all;}
-table{border-collapse:collapse; width:100%}
-td,th{border-bottom:1px solid var(--border); padding:.5rem .3rem; text-align:left}
-button{min-height:var(--tap); font-size:.95rem; border-radius:8px; cursor:pointer;
-  border:1px solid var(--border); background:var(--card); color:var(--fg); padding:.4rem .9rem;}
-button.primary{background:var(--accent); border-color:var(--accent); color:var(--accent-fg); font-weight:700;}
-button:disabled{opacity:.5; cursor:wait}
-button:focus-visible, input:focus-visible{outline:3px solid var(--accent); outline-offset:2px;}
-input{font-size:1rem; min-height:var(--tap); border-radius:8px; border:1px solid var(--border);
-  background:var(--bg); color:var(--fg); padding:.4rem .6rem; max-width:100%;}
-label{display:block; margin:.5rem 0}
-.muted{color:var(--muted); font-size:.9rem}
-.card{background:var(--card); border:1px solid var(--border); border-radius:var(--radius); padding:.9rem; margin:.8rem 0}
-#msg{font-weight:600; min-height:1.4em}
-pre{white-space:pre-wrap; word-break:break-all; font-size:.75rem; max-height:200px; overflow:auto;
-  background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:.6rem}
-.status-ok{color:var(--ok); font-weight:700} .status-bad{color:var(--no); font-weight:700}
-</style>
+<title>Issuer admin — {{ iss }}</title>
+<link rel="stylesheet" href="/static/issuer.css">
 </head>
 <body>
-<h1>Issuer <code>{{ iss }}</code></h1>
-<p>Pubkey: <code>{{ pub }}</code></p>
-<p>Revlist v{{ rev.v }} · revoked {{ rev.revoked|length }} ID(s)</p>
+<h1>Issuer admin <code>{{ iss }}</code></h1>
+<p>Signing key: <code>{{ fingerprint }}</code>
+{% if staged_fp %} · staged next: <code>{{ staged_fp }}</code>{% endif %}
+· bundle v{{ version }}</p>
 
-<h2>Test IDs <span class="muted">(synthetic seed — no real people, no birth dates shown)</span></h2>
-<table><thead><tr><th>ID</th><th>Eligible</th><th>Status</th><th>Issue</th></tr></thead><tbody>
-{% for u in users %}<tr><td>{{ u.id }}</td><td>{{ "adult" if u.adult else "minor" }}</td>
-<td class="{{ 'status-bad' if u.revoked else 'status-ok' }}">{{ "revoked" if u.revoked else "active" }}</td>
-<td><button onclick="issue('{{ u.id }}')">Issue for SHOP-A</button></td></tr>{% endfor %}
-</tbody></table>
-
-<section class="card" aria-label="Operator actions">
-  <h2>Operator <span class="muted">(needs the admin token)</span></h2>
-  <label>Admin token <input id="adminToken" type="password" autocomplete="off" style="width:100%"></label>
-  <label>User ID <input id="revokeUid" value="U003" style="width:100%"></label>
-  <p>
-    <button class="primary" id="revokeBtn" onclick="revoke()">Revoke user</button>
-    <button id="rotateBtn" onclick="rotate()">Rotate issuer key</button>
-  </p>
+<section class="card" aria-label="Admin sign-in">
+  <h2>Operator sign-in</h2>
+  <label>Admin token (kept in memory only, never stored)
+    <input id="adminToken" type="password" autocomplete="off" class="wide">
+  </label>
   <p id="msg" role="status" aria-live="polite"></p>
 </section>
 
+<h2>Test IDs <span class="muted">(synthetic seed — no real people, no birth dates shown)</span></h2>
+<table id="userTable"><thead><tr><th>ID</th><th>Status</th><th>Enroll</th><th>Revoke</th></tr></thead><tbody>
+{% for u in users %}<tr><td>{{ u.id }}</td>
+<td class="{{ 'status-bad' if u.revoked else 'status-ok' }}">{{ "revoked" if u.revoked else "active" }}</td>
+<td><button data-enroll="{{ u.id }}">New code</button></td>
+<td><button data-revoke="{{ u.id }}">Revoke</button></td></tr>{% endfor %}
+</tbody></table>
+
+<section class="card" aria-label="Key rotation">
+  <h2>Key rotation</h2>
+  <p class="muted">Stage first (bundle advertises the next key), then activate. Verifiers
+  only accept keys announced through this chain.</p>
+  <p><button id="stageBtn">Stage new key</button>
+  <button id="activateBtn">Activate staged key</button></p>
+</section>
+
 <h2>Output</h2>
-<pre id="out">Nothing yet.</pre>
+<pre id="out">Nothing yet. Enrollment codes are shown ONCE — copy them immediately.</pre>
 
-<p class="muted"><a href="/pubkey">pubkey</a> · <a href="/bundle?verifier_id=SHOP-A">signed bundle</a> · <a href="/revlist">revlist</a> · <a href="/healthz">health</a></p>
-
-<script>
-"use strict";
-function $(id){ return document.getElementById(id); }
-function say(msg){ $("msg").textContent = msg; }
-function show(obj){ $("out").textContent = typeof obj === "string" ? obj : JSON.stringify(obj, null, 2); }
-function adminHeaders(){
-  var h = {"Content-Type": "application/json"};
-  var t = $("adminToken").value;
-  if (t) h["X-Admin-Token"] = t;
-  return h;
-}
-async function issue(uid){
-  say("");
-  var res;
-  try {
-    res = await fetch("/issue", {method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({user_id: uid, verifier_id: "SHOP-A"})});
-  } catch (e) { say("Can't reach the issuer service."); return; }
-  var body = await res.text();
-  if (!res.ok) { say(res.status === 404 ? "Unknown user." : res.status === 403 ? "User is revoked." : "Issue failed (" + res.status + ")."); }
-  show(body);
-}
-async function revoke(){
-  var btn = $("revokeBtn"); btn.disabled = true; say("Revoking…");
-  try {
-    var res = await fetch("/revoke", {method: "POST", headers: adminHeaders(),
-      body: JSON.stringify({user_id: $("revokeUid").value})});
-    if (res.status === 403) say("Wrong or missing admin token.");
-    else if (!res.ok) say("Revoke failed (" + res.status + ").");
-    else { show(await res.text()); say("Revoked — refreshing table…"); setTimeout(function(){ location.reload(); }, 2000); }
-  } catch (e) { say("Can't reach the issuer service."); }
-  btn.disabled = false;
-}
-async function rotate(){
-  var btn = $("rotateBtn"); btn.disabled = true; say("Rotating…");
-  try {
-    var res = await fetch("/rotate", {method: "POST", headers: adminHeaders(), body: "{}"});
-    if (res.status === 403) say("Wrong or missing admin token.");
-    else if (res.status === 409) say("Key is managed by the environment — rotate it there.");
-    else if (!res.ok) say("Rotate failed (" + res.status + ").");
-    else { show(await res.text()); say("Rotated — refreshing…"); setTimeout(function(){ location.reload(); }, 2000); }
-  } catch (e) { say("Can't reach the issuer service."); }
-  btn.disabled = false;
-}
-</script>
+<p class="muted"><a href="/pubkey">pubkey</a> · <a href="/bundle?vid=SHOP-A">signed bundle</a> · <a href="/healthz">health</a></p>
+<script src="/static/issuer.js"></script>
 </body>
 </html>

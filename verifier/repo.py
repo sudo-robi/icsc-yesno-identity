@@ -1,8 +1,5 @@
-"""Verifier repository: SQLite access for receipts + OTP replay memory.
-
-Callers pass an explicit db path, so service code is testable without Flask
-and without touching module globals.
-"""
+"""Verifier repository: SQLite access. Explicit paths, parameterized SQL only."""
+import json
 import logging
 import sqlite3
 
@@ -10,40 +7,94 @@ log = logging.getLogger("verifier.repo")
 
 
 def connect(db_path: str) -> sqlite3.Connection:
-    """Open a connection with dict-like rows."""
-    conn = sqlite3.connect(db_path)
+    """Open a connection with dict-like rows (generous busy timeout for
+    concurrent writers; writers still serialize via IMMEDIATE transactions)."""
+    conn = sqlite3.connect(db_path, timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
 
 def init_db(db_path: str) -> None:
-    """Create tables (idempotent). Migrates the legacy single-column used_codes
-    schema: replay memory only ever matters inside the 60s OTP window, so
-    dropping it on upgrade is harmless (documented)."""
+    """Create tables (idempotent)."""
     conn = connect(db_path)
+    conn.execute("""CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT)""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS nonces
+                    (nonce TEXT PRIMARY KEY, vid TEXT, issued_at INT, exp INT)""")
     conn.execute("""CREATE TABLE IF NOT EXISTS receipts
                     (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INT, verifier_id TEXT,
-                     q TEXT, result TEXT, nonce_hash TEXT, sig_hash TEXT,
+                     q TEXT, result TEXT, reason TEXT,
                      prev_hash TEXT, entry_hash TEXT)""")
-    old = conn.execute(
-        "SELECT sql FROM sqlite_master WHERE name='used_codes'").fetchone()
-    if old and "step" not in (old["sql"] or ""):
-        conn.execute("DROP TABLE used_codes")
-    conn.execute("""CREATE TABLE IF NOT EXISTS used_codes
-                    (code TEXT, step INT, ts INT, PRIMARY KEY (code, step))""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS otp_used
+                    (sub TEXT, step INT, ts INT, PRIMARY KEY (sub, step))""")
+    conn.commit()
+    conn.close()
+
+
+def kv_get(db_path: str, key: str) -> str | None:
+    conn = connect(db_path)
+    row = conn.execute("SELECT v FROM kv WHERE k=?", (key,)).fetchone()
+    conn.close()
+    return row["v"] if row else None
+
+
+def kv_set(db_path: str, key: str, value: str) -> None:
+    conn = connect(db_path)
+    conn.execute("INSERT INTO kv(k,v) VALUES (?,?) "
+                 "ON CONFLICT(k) DO UPDATE SET v=excluded.v", (key, value))
+    conn.commit()
+    conn.close()
+
+
+def get_bundle(db_path: str) -> dict | None:
+    """Pinned trust bundle, or None before pairing."""
+    raw = kv_get(db_path, "bundle")
+    return json.loads(raw) if raw else None
+
+
+def save_bundle(db_path: str, bundle: dict) -> None:
+    kv_set(db_path, "bundle", json.dumps(bundle))
+
+
+def add_nonce(db_path: str, nonce: str, vid: str, issued_at: int, exp: int) -> None:
+    conn = connect(db_path)
+    conn.execute("INSERT OR REPLACE INTO nonces VALUES (?,?,?,?)",
+                 (nonce, vid, issued_at, exp))
+    conn.commit()
+    conn.close()
+
+
+def consume_nonce(db_path: str, nonce: str, min_issued_at: int, now_ts: int) -> dict | None:
+    """Atomically take a fresh nonce (single-use even under concurrency).
+
+    Returns the row, or None when unknown/expired/already spent — exactly one
+    concurrent claimant wins the DELETE.
+    """
+    conn = connect(db_path)
+    conn.isolation_level = None
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        row = conn.execute("DELETE FROM nonces WHERE nonce=? AND issued_at>? AND exp>? "
+                           "RETURNING nonce, vid, issued_at, exp",
+                           (nonce, min_issued_at, now_ts)).fetchone()
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.close()
+    return dict(row) if row else None
+
+
+def prune_nonces(db_path: str, min_issued_at: int) -> None:
+    conn = connect(db_path)
+    conn.execute("DELETE FROM nonces WHERE issued_at<=?", (min_issued_at,))
     conn.commit()
     conn.close()
 
 
 def append_receipt(db_path: str, *, ts: int, verifier_id: str, q: str,
-                   result: str, nonce_hash: str, sig_hash: str,
-                   entry_hash_of) -> str:
-    """Append one receipt in a single IMMEDIATE transaction so concurrent
-    writers serialize on the chain head instead of forking it.
-
-    ``entry_hash_of(prev_hash)`` builds the link hash; kept injectable so the
-    HMAC key handling stays in the service layer.
-    """
+                   result: str, reason: str, entry_hash_of) -> str:
+    """Append one receipt in a single IMMEDIATE transaction (no forks)."""
     conn = connect(db_path)
     conn.isolation_level = None
     conn.execute("BEGIN IMMEDIATE")
@@ -53,10 +104,9 @@ def append_receipt(db_path: str, *, ts: int, verifier_id: str, q: str,
         prev_hash = prev["entry_hash"] if prev else "GENESIS"
         entry_hash = entry_hash_of(prev_hash)
         conn.execute("INSERT INTO receipts "
-                     "(ts,verifier_id,q,result,nonce_hash,sig_hash,prev_hash,entry_hash)"
-                     " VALUES (?,?,?,?,?,?,?,?)",
-                     (ts, verifier_id, q, result, nonce_hash, sig_hash,
-                      prev_hash, entry_hash))
+                     "(ts,verifier_id,q,result,reason,prev_hash,entry_hash)"
+                     " VALUES (?,?,?,?,?,?,?)",
+                     (ts, verifier_id, q, result, reason, prev_hash, entry_hash))
         conn.execute("COMMIT")
     except Exception:
         conn.execute("ROLLBACK")
@@ -67,55 +117,39 @@ def append_receipt(db_path: str, *, ts: int, verifier_id: str, q: str,
 
 
 def list_receipts(db_path: str, limit: int = 100) -> list[dict]:
-    """Newest-first receipts for the shop UI / auditor."""
+    """Newest-first receipts."""
     conn = connect(db_path)
-    rows = conn.execute(
-        "SELECT * FROM receipts ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+    rows = conn.execute("SELECT * FROM receipts ORDER BY id DESC LIMIT ?",
+                        (limit,)).fetchall()
     conn.close()
     return [dict(r) for r in rows]
 
 
 def all_receipts(db_path: str) -> list[dict]:
-    """Oldest-first full log for CSV export / chain audit."""
+    """Oldest-first full log for export/audit."""
     conn = connect(db_path)
     rows = conn.execute("SELECT * FROM receipts ORDER BY id").fetchall()
     conn.close()
     return [dict(r) for r in rows]
 
 
-def verify_chain(rows: list[dict], entry_hash_of) -> bool:
-    """Recompute every link from stored fields. Any edit breaks the chain."""
-    prev = "GENESIS"
-    for row in rows:
-        if row["prev_hash"] != prev:
-            return False
-        if row["entry_hash"] != entry_hash_of(row):
-            return False
-        prev = row["entry_hash"]
-    return True
-
-
-def is_code_used(db_path: str, code: str, step: int) -> bool:
-    """Was this code value already spent *in this step*? A value recurring in a
-    later 30s window is a different code instance and starts fresh."""
+def is_code_used(db_path: str, sub: str, step: int) -> bool:
     conn = connect(db_path)
-    hit = conn.execute("SELECT 1 FROM used_codes WHERE code=? AND step=?",
-                       (code, step)).fetchone()
+    hit = conn.execute("SELECT 1 FROM otp_used WHERE sub=? AND step=?",
+                       (sub, step)).fetchone()
     conn.close()
     return hit is not None
 
 
-def mark_code_used(db_path: str, code: str, step: int, ts: int) -> None:
+def mark_code_used(db_path: str, sub: str, step: int, ts: int) -> None:
     conn = connect(db_path)
-    conn.execute("INSERT OR IGNORE INTO used_codes VALUES (?,?,?)",
-                 (code, step, ts))
+    conn.execute("INSERT OR IGNORE INTO otp_used VALUES (?,?,?)", (sub, step, ts))
     conn.commit()
     conn.close()
 
 
 def prune_codes(db_path: str, min_step: int) -> None:
-    """Drop replay memory outside the grace window (keeps the table tiny)."""
     conn = connect(db_path)
-    conn.execute("DELETE FROM used_codes WHERE step < ?", (min_step,))
+    conn.execute("DELETE FROM otp_used WHERE step < ?", (min_step,))
     conn.commit()
     conn.close()
