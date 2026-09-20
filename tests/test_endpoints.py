@@ -74,8 +74,13 @@ def test_endpoints(tmp_path, monkeypatch):
 def test_holder_lib_and_versioned_healthz(tmp_path):
     _s(str(tmp_path))
     vc = V.app.test_client()
-    lib = vc.get("/holder/qrcode-lib.js")
-    assert lib.status_code == 200 and b"qrcode" in lib.data
+    # vendored libs load at root AND under the /verifier subpath (PrefixStrip)
+    for path in ("/static/qrcode-lib.js", "/static/jsqr.min.js",
+                 "/static/scanutil.js", "/static/scanner.js",
+                 "/verifier/static/qrcode-lib.js", "/verifier/static/jsqr.min.js"):
+        r = vc.get(path)
+        assert r.status_code == 200, path
+    assert b"qrcode" in vc.get("/static/qrcode-lib.js").data
     h = vc.get("/healthz").get_json()
     assert h["trust"] is False and h["v"] is None
     with open(V.TRUST, "w") as f:

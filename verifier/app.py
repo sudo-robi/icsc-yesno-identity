@@ -29,7 +29,10 @@ DB = config.file_path(config.VERIFIER_DB_ENV, "receipts.db", BASE)
 TRUST = config.file_path(config.TRUSTBUNDLE_ENV, "trustbundle.json", BASE)
 VERIFIER_ID = os.environ.get(config.VERIFIER_ID_ENV, config.VERIFIER_ID_DEFAULT)
 
-app = Flask(__name__)
+app = Flask(__name__,
+            static_folder=os.path.join(os.path.dirname(BASE), "static"))
+# The repo-level static/ dir (vendored QR libs + scanner) is served at
+# /static/* at root AND under every PrefixStrip subpath (/verifier, /holder).
 limiter = Limiter(get_remote_address, app=app,
                   default_limits=config.DEFAULT_LIMITS,
                   storage_uri=os.environ.get(config.RATELIMIT_STORAGE_ENV,
@@ -289,13 +292,6 @@ def holder_page():
     """Serve the holder web page same-origin (used on hosted deployments)."""
     holder_dir = os.path.join(os.path.dirname(BASE), "holder")
     return send_from_directory(holder_dir, "index.html")
-
-
-@app.get("/holder/qrcode-lib.js")
-def holder_qr_lib():
-    """Vendored offline QR encoder (MIT, kazuhikoarase/qrcode-generator)."""
-    holder_dir = os.path.join(os.path.dirname(BASE), "holder")
-    return send_from_directory(holder_dir, "qrcode-lib.js")
 
 
 if __name__ == "__main__":  # pragma: no cover - dev entrypoint

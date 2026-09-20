@@ -4,6 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Shop check — {{ verifier }}</title>
+<script src="/static/qrcode-lib.js" defer></script>
+<script src="/static/scanutil.js" defer></script>
+<script src="/static/scanner.js" defer></script>
 <style>
 :root{
   --bg:#ffffff; --fg:#111827; --muted:#6b7280; --card:#f3f4f6;
@@ -34,10 +37,8 @@ button:disabled{opacity:.5; cursor:wait}
 button:focus-visible, textarea:focus-visible, input:focus-visible{outline:3px solid var(--accent); outline-offset:2px;}
 textarea{width:100%; min-height:96px; font-size:.85rem; border-radius:8px;
   border:1px solid var(--border); background:var(--bg); color:var(--fg); padding:.5rem;}
-input{font-size:1rem; min-height:var(--tap); border-radius:8px; border:1px solid var(--border);
-  background:var(--bg); color:var(--fg); padding:.4rem .6rem; width:100%;}
 #video{width:100%; border-radius:var(--radius); background:#000; display:block}
-#videoWrap{margin:.6rem 0}
+#challengeQR{width:132px; height:132px; background:#fff; border-radius:8px;}
 #result{border-radius:var(--radius); padding:2rem 1rem; text-align:center; margin:1rem 0; display:none}
 #result.show{display:block}
 #result.yes{background:var(--ok-bg); border:3px solid var(--ok)}
@@ -53,6 +54,7 @@ input{font-size:1rem; min-height:var(--tap); border-radius:8px; border:1px solid
 table{width:100%; border-collapse:collapse; font-size:.9rem}
 td,th{border-bottom:1px solid var(--border); padding:.4rem .2rem; text-align:left}
 .row{display:flex; gap:.5rem; flex-wrap:wrap; margin-top:.6rem}
+.challengeRow{display:flex; gap:.8rem; align-items:center; flex-wrap:wrap}
 @media (prefers-reduced-motion:reduce){ *{transition:none !important; animation:none !important;} }
 </style>
 </head>
@@ -74,9 +76,14 @@ td,th{border-bottom:1px solid var(--border); padding:.4rem .2rem; text-align:lef
   <h2>1 · Scan the customer's QR</h2>
   <div id="videoWrap" hidden>
     <video id="video" playsinline muted aria-label="Camera viewfinder"></video>
-    <div class="row"><button id="scanBtn" onclick="toggleScan()">Start camera</button></div>
+    <div class="row">
+      <button id="scanBtn" onclick="toggleScan()">Start camera</button>
+      <button id="torchBtn" onclick="toggleTorch()" hidden>Torch: off</button>
+      <button id="switchBtn" onclick="switchCamera()" hidden>Switch camera</button>
+    </div>
+    <p class="muted" id="backendNote"></p>
   </div>
-  <div id="noCamMsg" class="muted" hidden>Camera scanning isn't available here — paste the code below.</div>
+  <div id="noCamMsg" class="muted" hidden></div>
   <label>Paste credential JSON instead
     <textarea id="credInput" placeholder='{"v":1, …}' spellcheck="false"></textarea>
   </label>
@@ -84,10 +91,14 @@ td,th{border-bottom:1px solid var(--border); padding:.4rem .2rem; text-align:lef
 </section>
 
 <section class="card" aria-label="Challenge">
-  <h2>2 · Challenge (stops copied QRs)</h2>
-  <p class="muted">The customer answers this code in their app. It changes every check.</p>
-  <p>Current challenge: <code class="mono" id="nonce">…</code></p>
-  <div class="row"><button onclick="freshChallenge()">New challenge</button></div>
+  <h2>2 · Challenge <span class="muted">(stops copied QRs — customer scans it)</span></h2>
+  <div class="challengeRow">
+    <canvas id="challengeQR" width="132" height="132" role="img" aria-label="Challenge QR code"></canvas>
+    <div>
+      <p style="margin:.2rem 0">Code: <code class="mono" id="nonce">…</code></p>
+      <div class="row"><button onclick="freshChallenge()">New challenge</button></div>
+    </div>
+  </div>
 </section>
 
 <section class="card" aria-label="Recent checks">
@@ -101,7 +112,7 @@ td,th{border-bottom:1px solid var(--border); padding:.4rem .2rem; text-align:lef
 <script>
 "use strict";
 /* textContent only — server data is never inserted as HTML. */
-var scanning = false, scanTimer = null, resetTimer = null, lastText = "";
+var scanner = null, resetTimer = null;
 
 function $(id){ return document.getElementById(id); }
 function say(msg){ $("msg").textContent = msg; }
@@ -109,13 +120,13 @@ function say(msg){ $("msg").textContent = msg; }
 var REASONS = {
   OK: "Verified — over 18.",
   OK_OTP: "Verified by fallback code.",
-  EXPIRED: "Credential expired — ask the customer to refresh.",
-  REPLAY: "Copied or reused QR — ask for a fresh code.",
+  EXPIRED: "Credential expired, ask the customer to refresh.",
+  REPLAY: "Copied or reused QR.",
   REVOKED: "This ID was revoked.",
   BADSIG: "Invalid signature — possible forgery.",
   NOT_ADULT: "Under 18.",
   UNKNOWN_CHALLENGE: "Challenge expired — get a new one.",
-  MALFORMED: "Unreadable code — try pasting again.",
+  MALFORMED: "Unreadable code — try again.",
   TOO_LARGE: "Code too large to be valid.",
   NO_TRUSTBUNDLE: "This checker isn't paired yet.",
   BAD_OTP: "Wrong code — ask the customer to read it again.",
@@ -131,9 +142,8 @@ function showResult(ok, word, icon, why){
   $("resultWord").style.color = ok ? "var(--ok)" : "var(--no)";
   $("resultWhy").textContent = why;
   if (resetTimer) clearTimeout(resetTimer);
-  resetTimer = setTimeout(hideResult, 6000);
+  resetTimer = setTimeout(function(){ box.className = ""; say("Ready to scan."); }, 6000);
 }
-function hideResult(){ $("result").className = ""; }
 
 async function api(path, opts){
   var res = await fetch(path, opts);
@@ -147,10 +157,10 @@ async function refreshStatus(){
     var r = await api("/healthz");
     var tb = $("trustBadge");
     if (r.ok && r.json.trust) {
-      tb.textContent = "Trust: loaded" + (r.json.v != null ? " · v" + r.json.v : "");
+      tb.textContent = "Trust bundle v" + r.json.v + " loaded";
       tb.className = "badge ok";
     } else {
-      tb.textContent = "Trust: NOT PAIRED";
+      tb.textContent = "Trust bundle missing — pair this checker";
       tb.className = "badge bad";
     }
   } catch (e) {
@@ -164,79 +174,116 @@ async function refreshStatus(){
 window.addEventListener("online", refreshStatus);
 window.addEventListener("offline", refreshStatus);
 
-async function freshChallenge(){
+async function freshChallenge(auto){
   try {
     var r = await api("/challenge");
-    $("nonce").textContent = r.json.nonce;
-  } catch (e) { $("nonce").textContent = "unavailable"; }
+    var nonce = r.json.nonce;
+    $("nonce").textContent = nonce;
+    if (window.QRScanner) QRScanner.drawQR($("challengeQR"), nonce);
+  } catch (e) {
+    if (!auto) say("Couldn't fetch a challenge — check the connection.");
+    $("nonce").textContent = "unavailable";
+  }
+}
+setInterval(function(){ freshChallenge(true); }, 120000);
+
+function currentNonce(){
+  var t = $("nonce").textContent;
+  return (t && t !== "…" && t !== "unavailable") ? t : "";
 }
 
 async function doVerify(credText){
-  var cred;
-  try { cred = JSON.parse(credText); }
-  catch (e) { showResult(false, "NO", "✕", REASONS.MALFORMED); return; }
-  if (!cred || typeof cred !== "object") {
-    showResult(false, "NO", "✕", REASONS.MALFORMED); return;
+  var check = window.ScanUtil
+    ? ScanUtil.validateCredential(credText)
+    : {ok: true, cred: JSON.parse(credText)};
+  if (!check.ok) {
+    showResult(false, "NO", "✕",
+      check.error === "too-large" ? REASONS.TOO_LARGE
+      : "That doesn't look like an ID QR — keep scanning.");
+    return;
   }
   var btn = $("verifyBtn"); btn.disabled = true; say("Checking…");
   try {
-    var r = await fetch("/verify", {method: "POST",
+    var res = await fetch("/verify", {method: "POST",
       headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({cred: cred, nonce: currentNonce()})});
-    var text = await r.text(), j = null;
+      body: JSON.stringify({cred: check.cred, nonce: currentNonce()})});
+    var text = await res.text(), j = null;
     try { j = JSON.parse(text); } catch (e) {}
-    if (!j) { showResult(false, "NO", "✕", "Checker gave an unclear answer. Try again."); }
+    if (!j) showResult(false, "NO", "✕", "Checker gave an unclear answer. Try again.");
     else if (j.result === "YES") showResult(true, "YES", "✓", REASONS[j.reason] || j.reason);
     else showResult(false, "NO", "✕", REASONS[j.reason] || ("Refused (" + j.reason + ")."));
   } catch (e) {
     showResult(false, "NO", "✕", "Can't reach the checker. It may be restarting.");
   } finally { btn.disabled = false; say(""); loadRecent(); }
 }
-function currentNonce(){
-  var t = $("nonce").textContent;
-  return (t && t !== "…" && t !== "unavailable") ? t : "";
-}
+
 function verifyPasted(){
   var t = $("credInput").value.trim();
   if (!t) { say("Paste the customer's code first, or start the camera."); return; }
   doVerify(t);
 }
 
+/* ---- camera ---- */
+function scannerReady(){ return !!(window.QRScanner && window.ScanUtil); }
+
+function describeStartFailure(reason){
+  return {
+    insecure: "Camera needs HTTPS or localhost — paste the code instead (see README).",
+    denied: "Camera blocked. Allow access in the browser, or paste the code instead.",
+    busy: "Camera is in use by another app. Close it or paste the code instead.",
+    missing: "No camera found — paste the code instead.",
+    unsupported: "This browser can't scan — paste the code instead."
+  }[reason] || "Camera unavailable — paste the code instead.";
+}
+
 async function toggleScan(){
-  if (scanning) { stopScan(); return; }
-  var video = $("video");
-  try {
-    var stream = await navigator.mediaDevices.getUserMedia({video: {facingMode: "environment"}});
-    video.srcObject = stream;
-    await video.play();
-  } catch (e) {
-    say("Camera unavailable. Paste the code instead.");
+  if (scanner && scanner.isScanning()) { stopScanUI(); return; }
+  if (!scannerReady()) { say(describeStartFailure("unsupported")); return; }
+  scanner = QRScanner.createScanner({
+    video: $("video"),
+    onResult: function (text) {
+      var check = ScanUtil.validateCredential(text);
+      if (!check.ok) {
+        say(check.error === "too-large" ? REASONS.TOO_LARGE
+          : "That doesn't look like an ID QR — keep scanning.");
+        return; // keep scanning
+      }
+      stopScanUI();
+      doVerify(text);
+    },
+    onNotice: function () {}
+  });
+  $("backendNote").textContent = scanner.backend() === "native"
+    ? "Fast native scan." : scanner.backend() === "jsqr"
+    ? "Compatibility scan (slower)." : "";
+  var cams = await scanner.refreshCameras();
+  $("switchBtn").hidden = cams.length < 2;
+  $("videoWrap").hidden = false;
+  var r = await scanner.start();
+  if (!r.ok) {
+    stopScanUI();
+    say(describeStartFailure(r.reason));
     return;
   }
-  scanning = true;
   $("scanBtn").textContent = "Stop camera";
+  $("torchBtn").hidden = !scanner.torchSupported();
   say("Point the camera at the QR code.");
-  scanTimer = setInterval(scanFrame, 500);
 }
-function stopScan(){
-  scanning = false;
-  if (scanTimer) { clearInterval(scanTimer); scanTimer = null; }
-  var video = $("video");
-  if (video.srcObject) video.srcObject.getTracks().forEach(function(t){ t.stop(); });
-  video.srcObject = null;
+function stopScanUI(){
+  if (scanner) scanner.stop();
+  $("videoWrap").hidden = true;
   $("scanBtn").textContent = "Start camera";
+  $("torchBtn").hidden = true;
 }
-async function scanFrame(){
-  if (!scanning || lastText) return;
-  try {
-    var hits = await new BarcodeDetector({formats: ["qr_code"]}).detect($("video"));
-    if (hits.length && hits[0].rawValue && hits[0].rawValue !== lastText) {
-      lastText = hits[0].rawValue;
-      stopScan();
-      doVerify(lastText);
-      setTimeout(function(){ lastText = ""; }, 7000);
-    }
-  } catch (e) { /* detector hiccup: keep scanning */ }
+async function toggleTorch(){
+  if (!scanner) return;
+  var on = await scanner.toggleTorch();
+  $("torchBtn").textContent = on ? "Torch: on" : "Torch: off";
+}
+async function switchCamera(){
+  if (!scanner) return;
+  if (!await scanner.nextCamera()) say("Couldn't switch camera.");
+  else if (!scanner.torchSupported()) $("torchBtn").hidden = true;
 }
 
 async function loadRecent(){
@@ -261,10 +308,14 @@ async function loadRecent(){
 }
 
 (function init(){
-  var camOk = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia
-    && window.BarcodeDetector);
-  $("videoWrap").hidden = !camOk;
-  $("noCamMsg").hidden = camOk;
+  var camOk = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+  $("videoWrap").hidden = true;
+  var noCam = $("noCamMsg");
+  if (!camOk) { noCam.hidden = false; noCam.textContent = "No camera on this device — paste the code below."; }
+  else if (!window.isSecureContext) {
+    noCam.hidden = false;
+    noCam.textContent = "Camera needs HTTPS or localhost — serve securely or paste the code below.";
+  }
   refreshStatus(); freshChallenge(); loadRecent();
 })();
 </script>

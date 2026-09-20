@@ -4,7 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Holder — Yes/No ID</title>
-<script src="./qrcode-lib.js" defer></script>
+<script src="../static/qrcode-lib.js" defer></script>
+<script src="../static/scanutil.js" defer></script>
+<script src="../static/scanner.js" defer></script>
 <style>
 :root{
   --bg:#ffffff; --fg:#111827; --muted:#6b7280; --card:#f3f4f6;
@@ -23,6 +25,7 @@ body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
   background:var(--bg); color:var(--fg); margin:0; padding:0 1rem 3rem;
   max-width:520px; margin-inline:auto;}
 h1{font-size:1.4rem; margin:1.2rem 0 .4rem}
+h2{font-size:1.05rem; margin:.2rem 0 .6rem}
 .sub{color:var(--muted); margin:0 0 1rem}
 button{min-height:var(--tap); min-width:var(--tap); font-size:1rem;
   border-radius:var(--radius); border:1px solid var(--border);
@@ -38,6 +41,7 @@ label{display:block; margin:.5rem 0}
 .card{background:var(--card); border:1px solid var(--border); border-radius:var(--radius);
   padding:1rem; margin:1rem 0; text-align:center}
 #qrCanvas{width:min(72vw,260px); height:auto; background:#fff; border-radius:8px;}
+#scanVideo{width:100%; border-radius:8px; background:#000; display:block}
 .ringwrap{display:flex; align-items:center; justify-content:center; gap:.6rem; margin-top:.6rem}
 #err{background:var(--no); color:#fff; border-radius:var(--radius); padding:.7rem;
   margin:.8rem 0; font-weight:600}
@@ -85,8 +89,13 @@ pre{white-space:pre-wrap; word-break:break-all; font-size:.72rem; text-align:lef
 </section>
 
 <section id="challengeState" class="card" aria-label="Answer a shop challenge">
-  <h2 style="font-size:1.05rem; margin:.2rem 0 .6rem">Shop showed a challenge?</h2>
-  <label>Challenge code from the shop
+  <h2>Shop showed a challenge?</h2>
+  <div class="row">
+    <button id="scanBtn" onclick="toggleChallengeScan()">Scan shop QR</button>
+  </div>
+  <video id="scanVideo" playsinline muted hidden aria-label="Challenge scanner viewfinder"></video>
+  <p class="muted" id="scanHint" hidden>Point at the shop's QR. <span id="scanBackend"></span></p>
+  <label>…or paste the challenge code
     <input id="nonceInput" inputmode="latin" autocomplete="off" spellcheck="false"
       placeholder="paste the shop's code" style="width:100%">
   </label>
@@ -94,7 +103,7 @@ pre{white-space:pre-wrap; word-break:break-all; font-size:.72rem; text-align:lef
 </section>
 
 <section id="otpState" class="card" aria-label="Fallback code">
-  <h2 style="font-size:1.05rem; margin:.2rem 0 .6rem">No camera? Read this code aloud</h2>
+  <h2>No camera? Read this code aloud</h2>
   <div id="otpCode" aria-live="polite">——— ———</div>
   <p class="muted" id="otpTtl">Tap below to show a code.</p>
   <button onclick="fetchCode()">Show fallback code</button>
@@ -121,6 +130,7 @@ pre{white-space:pre-wrap; word-break:break-all; font-size:.72rem; text-align:lef
 "use strict";
 /* All rendering uses textContent / canvas pixels — never innerHTML on server data. */
 var cred = null, expTs = 0, tickTimer = null, otpTimer = null;
+var autoRefreshed = false, challengeScanner = null;
 var RING_C = 113;
 
 function $(id){ return document.getElementById(id); }
@@ -132,6 +142,9 @@ function setBusy(btn, busy, label){
   btn.disabled = busy;
   if (label) btn.textContent = busy ? "Working…" : label;
 }
+["click", "keydown", "touchstart"].forEach(function (ev) {
+  document.addEventListener(ev, function () { autoRefreshed = false; }, { passive: true });
+});
 
 function friendlyStatus(res){
   if (res.status === 404) return "Unknown test ID on this issuer.";
@@ -146,33 +159,16 @@ async function readJson(res){
   catch (e) { throw new Error("bad-body"); }
 }
 
-function drawQR(text){
-  var canvas = $("qrCanvas"), ctx = canvas.getContext("2d");
-  var size = 260, quiet = 12;
-  ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, size, size);
-  try {
-    var qr = qrcode(0, "M");
-    qr.addData(text);
-    qr.make();
-    var n = qr.getModuleCount();
-    var cell = (size - quiet * 2) / n;
-    ctx.fillStyle = "#000000";
-    for (var r = 0; r < n; r++)
-      for (var c = 0; c < n; c++)
-        if (qr.isDark(r, c)) ctx.fillRect(quiet + c * cell, quiet + r * cell, cell + 1, cell + 1);
-    return true;
-  } catch (e) { return false; }
-}
-
 function showCred(data){
   cred = data; expTs = data.exp || 0;
   clearError();
+  autoRefreshed = false;
   $("idleState").hidden = true;
   $("activeState").hidden = false;
   $("expiredNote").hidden = true;
   var text = JSON.stringify(data);
   $("rawJson").textContent = text;
-  if (typeof qrcode === "undefined" || !drawQR(text)) {
+  if (!window.QRScanner || !QRScanner.drawQR($("qrCanvas"), text)) {
     showError("Could not draw the QR code — use Copy JSON under Advanced instead.");
   }
   showOk("ID ready. Let the shop scan it.");
@@ -189,11 +185,24 @@ function restartTick(){
     if (s <= 0) {
       clearInterval(tickTimer); tickTimer = null;
       $("expiredNote").hidden = false;
+      // Idle auto-refresh: if the screen is just sitting visible, fetch a fresh
+      // code once so a stale QR never lingers. Any tap/typing cancels it.
+      if (!autoRefreshed && document.visibilityState === "visible") {
+        autoRefreshed = true;
+        setTimeout(function(){
+          if (!tickTimer && document.visibilityState === "visible") fetchCred();
+        }, 5000);
+      }
     }
   };
   update();
   tickTimer = setInterval(update, 1000);
 }
+document.addEventListener("visibilitychange", function(){
+  if (!document.hidden && !tickTimer && !autoRefreshed && expTs) {
+    autoRefreshed = true; fetchCred();
+  }
+});
 
 function fmtTime(s){
   var m = Math.floor(s / 60), r = s % 60;
@@ -213,15 +222,16 @@ async function postIssue(body, btn){
 }
 
 async function fetchCred(){
-  var btn = $("getBtn"); setBusy(btn, true, "Get my ID");
+  var btn = $("refreshBtn"); setBusy(btn, true);
+  var getBtn = $("getBtn"); setBusy(getBtn, true, "Get my ID");
   var data = await postIssue({user_id: $("uid").value, verifier_id: $("shop").value});
-  setBusy(btn, false, "Get my ID");
+  setBusy(btn, false); setBusy(getBtn, false, "Get my ID");
   if (data) showCred(data);
 }
 
 async function answerChallenge(){
   var nonce = $("nonceInput").value.trim();
-  if (!nonce) { showError("Paste the shop's challenge code first."); return; }
+  if (!nonce) { showError("Paste or scan the shop's challenge code first."); return; }
   var btn = $("answerBtn"); setBusy(btn, true, "Answer challenge");
   var data = await postIssue({user_id: $("uid").value,
     verifier_id: $("shop").value, nonce: nonce});
@@ -232,6 +242,43 @@ async function answerChallenge(){
 function copyJson(){
   var t = $("rawJson").textContent;
   if (navigator.clipboard) navigator.clipboard.writeText(t).catch(function(){});
+}
+
+async function toggleChallengeScan(){
+  var video = $("scanVideo"), hint = $("scanHint"), btn = $("scanBtn");
+  if (challengeScanner && challengeScanner.isScanning()) {
+    challengeScanner.stop(); video.hidden = true; hint.hidden = true;
+    btn.textContent = "Scan shop QR"; return;
+  }
+  if (!window.QRScanner) { showError("Scanner unavailable offline — paste the code instead."); return; }
+  challengeScanner = QRScanner.createScanner({
+    video: video,
+    onResult: function (text) {
+      var nonce = window.ScanUtil ? ScanUtil.parseChallenge(text) : text.trim();
+      if (!nonce) { showError("That QR doesn't look like a shop challenge."); return; }
+      challengeScanner.stop(); video.hidden = true; hint.hidden = true;
+      btn.textContent = "Scan shop QR";
+      $("nonceInput").value = nonce;
+      showOk("Challenge captured — tap Answer challenge.");
+    },
+    onNotice: function (msg) { showError(msg); }
+  });
+  var backend = challengeScanner.backend();
+  $("scanBackend").textContent = backend === "native" ? "(fast scan)" :
+    backend === "jsqr" ? "(compatibility scan)" : "";
+  video.hidden = false; hint.hidden = false;
+  btn.textContent = "Stop scanning";
+  var r = await challengeScanner.start();
+  if (!r.ok) {
+    video.hidden = true; hint.hidden = true; btn.textContent = "Scan shop QR";
+    showError({
+      insecure: "Camera needs HTTPS or localhost — paste the code instead.",
+      denied: "Camera blocked. Allow access or paste the code instead.",
+      busy: "Camera is in use by another app.",
+      missing: "No camera found — paste the code instead.",
+      unsupported: "This browser can't scan — paste the code instead."
+    }[r.reason] || "Camera unavailable — paste the code instead.");
+  }
 }
 
 async function fetchCode(){
