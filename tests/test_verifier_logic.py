@@ -1,0 +1,81 @@
+"""Direct decide() policy tests. agency: api-tester | ECC: verification-loop."""
+import json
+import os
+import sys
+import time
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+import verifier.app as V
+from shared.crypto import gen_keypair, sign_cred
+
+PRIV, PUB = gen_keypair()
+
+
+def _trust(tmp, **kw):
+    tb = {"iss": "NIMC-TEST-01", "pubkey_hex": PUB, "v": 1,
+          "revoked_uids": [], "otp_secrets": {}}
+    tb.update(kw)
+    p = os.path.join(tmp, "trust.json")
+    with open(p, "w") as f:
+        json.dump(tb, f)
+    V.TRUST = p
+    return tb
+
+
+def _cred(priv=PRIV, **kw):
+    body = {"v": 1, "iss": "NIMC-TEST-01", "uid_p": "abcd1234efgh5678",
+            "a": "over_18", "r": 1, "exp": int(time.time()) + 300}
+    body.update(kw)
+    c = dict(body)
+    c["s"] = sign_cred(body, priv)
+    return c
+
+
+def test_ok_and_not_adult(tmp_path):
+    _trust(str(tmp_path))
+    assert V.decide(_cred(), "") == ("YES", "OK")
+    assert V.decide(_cred(r=0), "") == ("NO", "NOT_ADULT")
+
+
+def test_expired_and_skew(tmp_path):
+    _trust(str(tmp_path))
+    assert V.decide(_cred(exp=int(time.time()) - 3600), "")[1] == "EXPIRED"
+    # inside 30s skew still verifies (not expired)
+    assert V.decide(_cred(exp=int(time.time()) - 10), "") == ("YES", "OK")
+
+
+def test_badsig_tampered_and_wrong_key(tmp_path):
+    _trust(str(tmp_path))
+    c = _cred()
+    c["uid_p"] = "ffff"  # tamper after signing
+    assert V.decide(c, "")[1] == "BADSIG"
+    other_priv, _ = gen_keypair()
+    assert V.decide(_cred(priv=other_priv), "")[1] == "BADSIG"
+
+
+def test_revoked(tmp_path):
+    _trust(str(tmp_path), revoked_uids=["abcd1234efgh5678"])
+    assert V.decide(_cred(), "") == ("NO", "REVOKED")
+
+
+def test_replay_and_live_nonce(tmp_path):
+    _trust(str(tmp_path))
+    static = _cred()
+    assert V.decide(static, "freshnonce123")[1] == "REPLAY"
+    live = _cred(n="freshnonce123")
+    assert V.decide(live, "freshnonce123") == ("YES", "OK")
+    assert V.decide(live, "othernonce")[1] == "REPLAY"
+
+
+def test_malformed_and_too_large(tmp_path):
+    _trust(str(tmp_path))
+    assert V.decide({"a": 1}, "")[1] == "MALFORMED"
+    big = _cred()
+    big["pad"] = "x" * 5000
+    assert V.decide(big, "")[1] == "TOO_LARGE"
+
+
+def test_no_trustbundle(tmp_path):
+    V.TRUST = os.path.join(str(tmp_path), "missing.json")
+    assert V.decide(_cred(), "") == ("NO", "NO_TRUSTBUNDLE")
