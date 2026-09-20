@@ -1,27 +1,272 @@
-<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Verify — {{ verifier }}</title>
-<style>body{font-family:system-ui;max-width:640px;margin:2rem auto;padding:0 1rem;text-align:center}
-#res{font-size:4rem;font-weight:900;padding:2rem;border-radius:1rem;margin:1rem 0}
-.yes{background:#0a7d2c;color:#fff}.no{background:#b00020;color:#fff}
-textarea{width:100%;height:90px}button{font-size:1.1rem;padding:.6rem 1.2rem}</style></head>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Shop check — {{ verifier }}</title>
+<style>
+:root{
+  --bg:#ffffff; --fg:#111827; --muted:#6b7280; --card:#f3f4f6;
+  --accent:#1d4ed8; --accent-fg:#ffffff; --ok:#047857; --ok-bg:#d1fae5;
+  --no:#b91c1c; --no-bg:#fee2e2; --border:#d1d5db; --radius:12px; --tap:48px;
+  color-scheme:light dark;
+}
+@media (prefers-color-scheme:dark){
+  :root{--bg:#111827; --fg:#f9fafb; --muted:#9ca3af; --card:#1f2937;
+    --accent:#60a5fa; --accent-fg:#111827; --ok:#34d399; --ok-bg:#064e3b;
+    --no:#f87171; --no-bg:#7f1d1d; --border:#374151;}
+}
+*{box-sizing:border-box}
+body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  background:var(--bg); color:var(--fg); margin:0; padding:0 1rem 3rem;
+  max-width:640px; margin-inline:auto;}
+h1{font-size:1.3rem; margin:1.2rem 0 .4rem}
+.badges{display:flex; gap:.5rem; flex-wrap:wrap; margin:.4rem 0 1rem}
+.badge{font-size:.85rem; border:1px solid var(--border); border-radius:999px; padding:.3rem .8rem;}
+.badge.ok{border-color:var(--ok); color:var(--ok); font-weight:700}
+.badge.bad{border-color:var(--no); color:var(--no); font-weight:700}
+button{min-height:var(--tap); font-size:1rem; border-radius:var(--radius);
+  border:1px solid var(--border); background:var(--card); color:var(--fg);
+  padding:.6rem 1.1rem; cursor:pointer;}
+button.primary{background:var(--accent); border-color:var(--accent); color:var(--accent-fg);
+  font-weight:700; width:100%;}
+button:disabled{opacity:.5; cursor:wait}
+button:focus-visible, textarea:focus-visible, input:focus-visible{outline:3px solid var(--accent); outline-offset:2px;}
+textarea{width:100%; min-height:96px; font-size:.85rem; border-radius:8px;
+  border:1px solid var(--border); background:var(--bg); color:var(--fg); padding:.5rem;}
+input{font-size:1rem; min-height:var(--tap); border-radius:8px; border:1px solid var(--border);
+  background:var(--bg); color:var(--fg); padding:.4rem .6rem; width:100%;}
+#video{width:100%; border-radius:var(--radius); background:#000; display:block}
+#videoWrap{margin:.6rem 0}
+#result{border-radius:var(--radius); padding:2rem 1rem; text-align:center; margin:1rem 0; display:none}
+#result.show{display:block}
+#result.yes{background:var(--ok-bg); border:3px solid var(--ok)}
+#result.no{background:var(--no-bg); border:3px solid var(--no)}
+#resultIcon{font-size:3.4rem; line-height:1}
+#resultWord{font-size:2.6rem; font-weight:900; margin:.3rem 0}
+#resultWhy{font-size:1.05rem}
+#msg{min-height:1.4em; font-weight:600; margin:.5rem 0}
+.card{background:var(--card); border:1px solid var(--border); border-radius:var(--radius); padding:.9rem; margin:.8rem 0}
+.card h2{font-size:1.02rem; margin:.1rem 0 .6rem}
+.muted{color:var(--muted); font-size:.9rem}
+.mono{font-family:ui-monospace,Menlo,Consolas,monospace; word-break:break-all}
+table{width:100%; border-collapse:collapse; font-size:.9rem}
+td,th{border-bottom:1px solid var(--border); padding:.4rem .2rem; text-align:left}
+.row{display:flex; gap:.5rem; flex-wrap:wrap; margin-top:.6rem}
+@media (prefers-reduced-motion:reduce){ *{transition:none !important; animation:none !important;} }
+</style>
+</head>
 <body>
 <h1>Shop check — {{ verifier }}</h1>
-{% if not has_trust %}<p style="color:red">No trustbundle. Pair with issuer once via /sync.</p>{% endif %}
-<p>Challenge nonce: <code id="nonce">…</code> <button onclick="fresh()">↻</button></p>
-<textarea id="cred" placeholder='Paste credential JSON or scan QR'></textarea><br><br>
-<button onclick="verify()">VERIFY (offline)</button>
-<div id="res">—</div>
-<pre id="log" style="text-align:left"></pre>
+<div class="badges" aria-live="polite">
+  <span class="badge" id="netBadge">…</span>
+  <span class="badge" id="trustBadge">Trust: ?</span>
+</div>
+
+<div id="result" role="status" aria-live="assertive">
+  <div id="resultIcon" aria-hidden="true"></div>
+  <div id="resultWord"></div>
+  <div id="resultWhy"></div>
+</div>
+<p id="msg" aria-live="polite"></p>
+
+<section class="card" aria-label="Scan or paste">
+  <h2>1 · Scan the customer's QR</h2>
+  <div id="videoWrap" hidden>
+    <video id="video" playsinline muted aria-label="Camera viewfinder"></video>
+    <div class="row"><button id="scanBtn" onclick="toggleScan()">Start camera</button></div>
+  </div>
+  <div id="noCamMsg" class="muted" hidden>Camera scanning isn't available here — paste the code below.</div>
+  <label>Paste credential JSON instead
+    <textarea id="credInput" placeholder='{"v":1, …}' spellcheck="false"></textarea>
+  </label>
+  <div class="row"><button class="primary" id="verifyBtn" onclick="verifyPasted()">Check ID</button></div>
+</section>
+
+<section class="card" aria-label="Challenge">
+  <h2>2 · Challenge (stops copied QRs)</h2>
+  <p class="muted">The customer answers this code in their app. It changes every check.</p>
+  <p>Current challenge: <code class="mono" id="nonce">…</code></p>
+  <div class="row"><button onclick="freshChallenge()">New challenge</button></div>
+</section>
+
+<section class="card" aria-label="Recent checks">
+  <h2>Recent checks <span class="muted">(no personal data kept)</span></h2>
+  <table><thead><tr><th>Time</th><th>Result</th><th>Mode</th></tr></thead>
+  <tbody id="recentBody"><tr><td colspan="3" class="muted">None yet.</td></tr></tbody></table>
+</section>
+
+<p class="muted"><a href="/receipts">Receipts</a> · <a href="/receipts.csv">CSV export</a> · <a href="/healthz">Health</a></p>
+
 <script>
-async function fresh(){const r=await fetch('/challenge');const j=await r.json();document.getElementById('nonce').textContent=j.nonce;}
-async function verify(){
-  const r=await fetch('/verify',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({cred:JSON.parse(document.getElementById('cred').value),nonce:document.getElementById('nonce').textContent})});
-  const j=await r.json();const d=document.getElementById('res');
-  d.textContent=j.result;d.className=j.result==='YES'?'yes':'no';
-  document.getElementById('log').textContent=JSON.stringify(j,null,2);
+"use strict";
+/* textContent only — server data is never inserted as HTML. */
+var scanning = false, scanTimer = null, resetTimer = null, lastText = "";
+
+function $(id){ return document.getElementById(id); }
+function say(msg){ $("msg").textContent = msg; }
+
+var REASONS = {
+  OK: "Verified — over 18.",
+  OK_OTP: "Verified by fallback code.",
+  EXPIRED: "Credential expired — ask the customer to refresh.",
+  REPLAY: "Copied or reused QR — ask for a fresh code.",
+  REVOKED: "This ID was revoked.",
+  BADSIG: "Invalid signature — possible forgery.",
+  NOT_ADULT: "Under 18.",
+  UNKNOWN_CHALLENGE: "Challenge expired — get a new one.",
+  MALFORMED: "Unreadable code — try pasting again.",
+  TOO_LARGE: "Code too large to be valid.",
+  NO_TRUSTBUNDLE: "This checker isn't paired yet.",
+  BAD_OTP: "Wrong code — ask the customer to read it again.",
+  BAD_PAIRING_TOKEN: "Pairing locked.",
+  ROLLBACK: "Outdated trust data refused."
+};
+
+function showResult(ok, word, icon, why){
+  var box = $("result");
+  box.className = "show " + (ok ? "yes" : "no");
+  $("resultIcon").textContent = icon;
+  $("resultWord").textContent = word;
+  $("resultWord").style.color = ok ? "var(--ok)" : "var(--no)";
+  $("resultWhy").textContent = why;
+  if (resetTimer) clearTimeout(resetTimer);
+  resetTimer = setTimeout(hideResult, 6000);
 }
-fresh();
+function hideResult(){ $("result").className = ""; }
+
+async function api(path, opts){
+  var res = await fetch(path, opts);
+  var text = await res.text();
+  try { return {status: res.status, ok: res.ok, json: JSON.parse(text)}; }
+  catch (e) { return {status: res.status, ok: false, json: null}; }
+}
+
+async function refreshStatus(){
+  try {
+    var r = await api("/healthz");
+    var tb = $("trustBadge");
+    if (r.ok && r.json.trust) {
+      tb.textContent = "Trust: loaded" + (r.json.v != null ? " · v" + r.json.v : "");
+      tb.className = "badge ok";
+    } else {
+      tb.textContent = "Trust: NOT PAIRED";
+      tb.className = "badge bad";
+    }
+  } catch (e) {
+    $("trustBadge").textContent = "Trust: ?"; $("trustBadge").className = "badge";
+  }
+  var online = navigator.onLine;
+  var nb = $("netBadge");
+  nb.textContent = online ? "Online" : "Offline — checks still work";
+  nb.className = "badge " + (online ? "ok" : "bad");
+}
+window.addEventListener("online", refreshStatus);
+window.addEventListener("offline", refreshStatus);
+
+async function freshChallenge(){
+  try {
+    var r = await api("/challenge");
+    $("nonce").textContent = r.json.nonce;
+  } catch (e) { $("nonce").textContent = "unavailable"; }
+}
+
+async function doVerify(credText){
+  var cred;
+  try { cred = JSON.parse(credText); }
+  catch (e) { showResult(false, "NO", "✕", REASONS.MALFORMED); return; }
+  if (!cred || typeof cred !== "object") {
+    showResult(false, "NO", "✕", REASONS.MALFORMED); return;
+  }
+  var btn = $("verifyBtn"); btn.disabled = true; say("Checking…");
+  try {
+    var r = await fetch("/verify", {method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({cred: cred, nonce: currentNonce()})});
+    var text = await r.text(), j = null;
+    try { j = JSON.parse(text); } catch (e) {}
+    if (!j) { showResult(false, "NO", "✕", "Checker gave an unclear answer. Try again."); }
+    else if (j.result === "YES") showResult(true, "YES", "✓", REASONS[j.reason] || j.reason);
+    else showResult(false, "NO", "✕", REASONS[j.reason] || ("Refused (" + j.reason + ")."));
+  } catch (e) {
+    showResult(false, "NO", "✕", "Can't reach the checker. It may be restarting.");
+  } finally { btn.disabled = false; say(""); loadRecent(); }
+}
+function currentNonce(){
+  var t = $("nonce").textContent;
+  return (t && t !== "…" && t !== "unavailable") ? t : "";
+}
+function verifyPasted(){
+  var t = $("credInput").value.trim();
+  if (!t) { say("Paste the customer's code first, or start the camera."); return; }
+  doVerify(t);
+}
+
+async function toggleScan(){
+  if (scanning) { stopScan(); return; }
+  var video = $("video");
+  try {
+    var stream = await navigator.mediaDevices.getUserMedia({video: {facingMode: "environment"}});
+    video.srcObject = stream;
+    await video.play();
+  } catch (e) {
+    say("Camera unavailable. Paste the code instead.");
+    return;
+  }
+  scanning = true;
+  $("scanBtn").textContent = "Stop camera";
+  say("Point the camera at the QR code.");
+  scanTimer = setInterval(scanFrame, 500);
+}
+function stopScan(){
+  scanning = false;
+  if (scanTimer) { clearInterval(scanTimer); scanTimer = null; }
+  var video = $("video");
+  if (video.srcObject) video.srcObject.getTracks().forEach(function(t){ t.stop(); });
+  video.srcObject = null;
+  $("scanBtn").textContent = "Start camera";
+}
+async function scanFrame(){
+  if (!scanning || lastText) return;
+  try {
+    var hits = await new BarcodeDetector({formats: ["qr_code"]}).detect($("video"));
+    if (hits.length && hits[0].rawValue && hits[0].rawValue !== lastText) {
+      lastText = hits[0].rawValue;
+      stopScan();
+      doVerify(lastText);
+      setTimeout(function(){ lastText = ""; }, 7000);
+    }
+  } catch (e) { /* detector hiccup: keep scanning */ }
+}
+
+async function loadRecent(){
+  try {
+    var r = await api("/receipts");
+    if (!r.ok || !r.json.length) return;
+    var tb = $("recentBody");
+    while (tb.firstChild) tb.removeChild(tb.firstChild);
+    r.json.slice(0, 5).forEach(function(row){
+      var tr = document.createElement("tr");
+      [["time", new Date(row.ts * 1000).toLocaleTimeString()],
+       ["res", row.result],
+       ["mode", (row.q || "").split(":")[1] || "—"]].forEach(function(pair){
+        var td = document.createElement("td");
+        td.textContent = pair[1];
+        if (pair[0] === "res") td.style.color = pair[1] === "YES" ? "var(--ok)" : "var(--no)";
+        tr.appendChild(td);
+      });
+      tb.appendChild(tr);
+    });
+  } catch (e) { /* receipts optional on this screen */ }
+}
+
+(function init(){
+  var camOk = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia
+    && window.BarcodeDetector);
+  $("videoWrap").hidden = !camOk;
+  $("noCamMsg").hidden = camOk;
+  refreshStatus(); freshChallenge(); loadRecent();
+})();
 </script>
-<p><a href="/receipts">receipts</a> · <a href="/receipts.csv">CSV</a> · <a href="/healthz">health</a></p>
-</body></html>
+</body>
+</html>

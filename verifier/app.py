@@ -119,8 +119,10 @@ def log_receipt(q: str, result: str, nonce: str | None, sig) -> str:
 
 @app.get("/healthz")
 def healthz():
-    """Liveness probe (also reports pairing state)."""
-    return {"ok": True, "verifier": VERIFIER_ID, "trust": bool(trust())}
+    """Liveness probe (also reports pairing state + bundle version)."""
+    paired = trust() or {}
+    return {"ok": True, "verifier": VERIFIER_ID, "trust": bool(paired),
+            "v": paired.get("v")}
 
 
 @app.get("/challenge")
@@ -287,6 +289,13 @@ def holder_page():
     """Serve the holder web page same-origin (used on hosted deployments)."""
     holder_dir = os.path.join(os.path.dirname(BASE), "holder")
     return send_from_directory(holder_dir, "index.html")
+
+
+@app.get("/holder/qrcode-lib.js")
+def holder_qr_lib():
+    """Vendored offline QR encoder (MIT, kazuhikoarase/qrcode-generator)."""
+    holder_dir = os.path.join(os.path.dirname(BASE), "holder")
+    return send_from_directory(holder_dir, "qrcode-lib.js")
 
 
 if __name__ == "__main__":  # pragma: no cover - dev entrypoint

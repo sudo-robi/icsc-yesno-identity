@@ -71,6 +71,19 @@ def test_endpoints(tmp_path, monkeypatch):
     assert vc.post("/verify", json={}).status_code == 400
 
 
+def test_holder_lib_and_versioned_healthz(tmp_path):
+    _s(str(tmp_path))
+    vc = V.app.test_client()
+    lib = vc.get("/holder/qrcode-lib.js")
+    assert lib.status_code == 200 and b"qrcode" in lib.data
+    h = vc.get("/healthz").get_json()
+    assert h["trust"] is False and h["v"] is None
+    with open(V.TRUST, "w") as f:
+        json.dump({"iss": "T", "pubkey_hex": "00" * 32, "v": 4}, f)
+    h = vc.get("/healthz").get_json()
+    assert h["trust"] is True and h["v"] == 4
+
+
 def test_sync_pairing_token(tmp_path, monkeypatch):
     from shared.crypto import gen_keypair, sign_cred
     _s(str(tmp_path))
