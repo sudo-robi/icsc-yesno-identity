@@ -1,178 +1,118 @@
-"""Issuer service — agency: backend-architect | ECC: backend-patterns service/repo layers.
-Production: Flask + Flask-Limiter, env config, structured logs, parameterized SQL.
+"""Issuer service routes (thin Flask layer over issuer.service / issuer.repo).
+
+Module globals (DB, KEYDIR, ISSUER_ID, ADMIN_TOKEN) are the documented override
+points used by tests, run.sh and live_demo.py — the service functions below
+take explicit arguments and read these globals at call time.
 """
 import json
 import logging
 import os
-import secrets as _rand
-import sqlite3
 import time
-from datetime import date
 
 from flask import Flask, jsonify, render_template, request
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from marshmallow import Schema, fields, ValidationError
 
-from shared.crypto import (
-    EXPIRY_SEC, gen_keypair, otp6, pseudonym, sign_cred,
-)
-from shared.schemas import CRED_REQUIRED_FIELDS, unsigned_body
+from issuer import repo, service
+from shared import config
+from shared.schemas import unsigned_body  # noqa: F401  (re-exported: test hook)
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 log = logging.getLogger("issuer")
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-_ON_VERCEL = os.environ.get("VERCEL") == "1"
-DB = os.environ.get("ISSUER_DB",
-     "/tmp/issuer.db" if _ON_VERCEL else os.path.join(BASE, "issuer.db"))
-KEYDIR = os.environ.get("ISSUER_KEYDIR",
-         "/tmp/keys" if _ON_VERCEL else os.path.join(os.path.dirname(BASE), "keys"))
-ISSUER_ID = os.environ.get("ISSUER_ID", "NIMC-TEST-01")
+DB = config.file_path(config.ISSUER_DB_ENV, "issuer.db", BASE)
+KEYDIR = config.dir_path(config.ISSUER_KEYDIR_ENV, "keys", os.path.dirname(BASE))
+ISSUER_ID = os.environ.get(config.ISSUER_ID_ENV, config.ISSUER_ID_DEFAULT)
 
-ADMIN_TOKEN = os.environ.get("ISSUER_ADMIN_TOKEN")
+ADMIN_TOKEN = os.environ.get(config.ISSUER_ADMIN_TOKEN_ENV)
 if not ADMIN_TOKEN:
+    import secrets as _rand
+
     ADMIN_TOKEN = _rand.token_hex(16)
     log.warning(json.dumps({"event": "admin_token_generated",
                             "note": "set ISSUER_ADMIN_TOKEN to pin it",
                             "token": ADMIN_TOKEN}))
 
-
-def require_admin():
-    """Operator auth for /revoke + /rotate. Returns None if OK, else (body, 403).
-    Env ISSUER_ADMIN_TOKEN overrides the generated default at request time
-    (so tests and redeploys can pin it without reimporting)."""
-    required = os.environ.get("ISSUER_ADMIN_TOKEN", ADMIN_TOKEN)
-    presented = request.headers.get("X-Admin-Token") or \
-        ((request.get_json(silent=True) or {}) if request.is_json else {}).get("admin_token")
-    if presented != required:
-        log.warning(json.dumps({"event": "admin_rejected",
-                                "path": request.path}))
-        return {"error": "bad admin token"}, 403
-    return None
-
-
-def is_adult(dob_str: str, today: date | None = None) -> bool:
-    """Calendar-correct 18+ check (leap-day safe). `18*365` day counts are off by days."""
-    y, m, d = map(int, dob_str.split("-"))
-    today = today or date.today()
-    try:
-        milestone = date(y + 18, m, d)
-    except ValueError:  # Feb 29 -> Feb 28 on non-leap years
-        milestone = date(y + 18, m, 28)
-    return milestone <= today
-
 app = Flask(__name__)
-limiter = Limiter(get_remote_address, app=app, default_limits=["200/hour"])
+limiter = Limiter(get_remote_address, app=app,
+                  default_limits=config.DEFAULT_LIMITS,
+                  storage_uri=os.environ.get(config.RATELIMIT_STORAGE_ENV,
+                                             config.RATELIMIT_STORAGE_DEFAULT))
 
 
 class IssueSchema(Schema):
+    """POST /issue body."""
     user_id = fields.Str(required=True, validate=lambda s: 1 <= len(s) <= 32)
     verifier_id = fields.Str(load_default="SHOP-A", validate=lambda s: len(s) <= 32)
     nonce = fields.Str(load_default="", validate=lambda s: len(s) <= 64)
 
 
 class RevokeSchema(Schema):
+    """POST /revoke body."""
     user_id = fields.Str(required=True)
 
 
+# --- compat wrappers (used by tests, run.sh, live_demo.py) ---
 def db():
-    c = sqlite3.connect(DB)
-    c.row_factory = sqlite3.Row
-    return c
+    """Open the issuer database."""
+    return repo.connect(DB)
 
 
 def init_db():
-    c = db()
-    c.execute("""CREATE TABLE IF NOT EXISTS users
-                 (id TEXT PRIMARY KEY, full_name TEXT, dob TEXT,
-                  revoked INT DEFAULT 0, master_secret TEXT)""")
-    c.execute("""CREATE TABLE IF NOT EXISTS revlist
-                 (v INT PRIMARY KEY, atTs INT, revoked_json TEXT, sig TEXT)""")
-    if c.execute("SELECT COUNT(*) c FROM users").fetchone()["c"] == 0:
-        import secrets as pysec
-        seed = [("U001", "Ada Test (adult)", "2000-05-12", 0),
-                ("U002", "Bola Test (minor)", "2010-03-01", 0),
-                ("U003", "Revoked Test", "1999-01-01", 1)]
-        for uid, nm, dob, rev in seed:
-            c.execute("INSERT INTO users VALUES (?,?,?,?,?)",
-                      (uid, nm, dob, rev, pysec.token_hex(16)))
-        log.info("seeded synthetic users (no real PII)")
-    if c.execute("SELECT COUNT(*) c FROM revlist").fetchone()["c"] == 0:
-        c.execute("INSERT INTO revlist VALUES (1,?, '[]','')", (int(time.time()),))
-    c.commit()
-    c.close()
+    """Create + seed the issuer database (idempotent)."""
+    repo.init_db(DB)
 
 
-def load_keys():
-    priv_hex = os.environ.get("ISSUER_PRIV_HEX")
-    os.makedirs(KEYDIR, exist_ok=True)
-    pf = os.path.join(KEYDIR, "issuer_priv.hex")
-    qf = os.path.join(KEYDIR, "issuer_pub.hex")
-    if priv_hex and len(priv_hex) == 64:
-        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-        pub = Ed25519PrivateKey.from_private_bytes(
-            bytes.fromhex(priv_hex)).public_key().public_bytes_raw().hex()
-        return priv_hex, pub
-    if os.path.exists(pf):
-        with open(pf) as f:
-            priv_hex = f.read().strip()
-        with open(qf) as f:
-            return priv_hex, f.read().strip()
-    priv_hex, pub_hex = gen_keypair()
-    with open(pf, "w") as f:
-        f.write(priv_hex)
-    with open(qf, "w") as f:
-        f.write(pub_hex)
-    log.info("generated new Ed25519 issuer keypair")
-    return priv_hex, pub_hex
+def load_keys() -> tuple[str, str]:
+    """Load (priv, pub) hex pair via KEYDIR (overridable for tests)."""
+    return service.load_keys(KEYDIR)
 
 
-def current_revlist(priv_hex):
-    c = db()
-    row = c.execute("SELECT * FROM revlist ORDER BY v DESC LIMIT 1").fetchone()
-    revoked = [r["id"] for r in c.execute(
-        "SELECT id FROM users WHERE revoked=1").fetchall()]
-    body = {"v": row["v"], "at": row["atTs"], "revoked": revoked}
-    body["s"] = sign_cred({k: body[k] for k in ("v", "at", "revoked")}, priv_hex)
-    c.close()
-    return body
+def is_adult(dob_str: str, today=None) -> bool:
+    """Calendar-correct 18+ check (re-exported from issuer.service)."""
+    return service.is_adult(dob_str, today)
+
+
+def current_revlist(priv_hex: str) -> dict:
+    """Raw revocation log for this issuer."""
+    return service.current_revlist(
+        rev_version=repo.revlist_version(DB), at_ts=int(time.time()),
+        revoked_ids=repo.revoked_user_ids(DB), priv_hex=priv_hex)
 
 
 def build_bundle(verifier_id: str, priv_hex: str, pub_hex: str) -> dict:
-    """Signed trust bundle for one verifier: per-verifier pseudonyms of revoked
-    users and minors, so the verifier can enforce status without ever seeing
-    names or DOBs. v is monotonic — verifiers reject rollbacks."""
-    c = db()
-    row = c.execute("SELECT * FROM revlist ORDER BY v DESC LIMIT 1").fetchone()
-    users = c.execute("SELECT id, dob, revoked, master_secret FROM users").fetchall()
-    c.close()
-    revoked, minors = [], []
-    for u in users:
-        pseudo = pseudonym(u["master_secret"], verifier_id)
-        if u["revoked"]:
-            revoked.append(pseudo)
-        elif not is_adult(u["dob"]):
-            minors.append(pseudo)
-    body = {"iss": ISSUER_ID, "pubkey_hex": pub_hex, "v": row["v"],
-            "verifier": verifier_id, "revoked": sorted(revoked),
-            "minors": sorted(minors)}
-    body["s"] = sign_cred(body, priv_hex)
-    return body
+    """Signed per-verifier trust bundle (pseudonyms only, no PII)."""
+    return service.build_bundle(
+        verifier_id=verifier_id, users=repo.all_user_status(DB),
+        rev_version=repo.revlist_version(DB),
+        issuer_id=ISSUER_ID, priv_hex=priv_hex, pub_hex=pub_hex)
+
+
+def require_admin():
+    """Operator auth for /revoke + /rotate. None if OK, else (body, 403)."""
+    required = os.environ.get(config.ISSUER_ADMIN_TOKEN_ENV, ADMIN_TOKEN)
+    presented = request.headers.get("X-Admin-Token")
+    if presented is None and request.is_json:
+        presented = (request.get_json(silent=True) or {}).get("admin_token")
+    if not service.admin_ok(presented, required):
+        log.warning(json.dumps({"event": "admin_rejected", "path": request.path}))
+        return {"error": "bad admin token"}, 403
+    return None
 
 
 @app.get("/healthz")
 def healthz():
+    """Liveness probe."""
     return {"ok": True, "iss": ISSUER_ID}
 
 
 @app.get("/pubkey")
 def pubkey():
+    """Current public key + revlist version (bootstrap for pairing)."""
     _, pub = load_keys()
-    c = db()
-    v = c.execute("SELECT v FROM revlist ORDER BY v DESC LIMIT 1").fetchone()["v"]
-    c.close()
-    return {"iss": ISSUER_ID, "pubkey_hex": pub, "v": v}
+    return {"iss": ISSUER_ID, "pubkey_hex": pub, "v": repo.revlist_version(DB)}
 
 
 @app.get("/bundle")
@@ -193,66 +133,51 @@ def revlist():
 
 
 @app.post("/issue")
-@limiter.limit("30/minute")
+@limiter.limit(config.LIMIT_ISSUE)
 def issue():
+    """Sign a credential for an enrolled user (open enrollment: prototype boundary)."""
     try:
         args = IssueSchema().load(request.get_json(force=True))
     except ValidationError as e:
         return {"error": e.messages}, 400
-    c = db()
-    u = c.execute("SELECT * FROM users WHERE id=?", (args["user_id"],)).fetchone()
-    c.close()
-    if not u:
+    try:
+        payload = service.issue_credential(
+            user=repo.get_user(DB, args["user_id"]),
+            verifier_id=args["verifier_id"], nonce=args.get("nonce", ""),
+            issuer_id=ISSUER_ID, priv_hex=load_keys()[0], now=time.time())
+    except service.UnknownUserError:
         return {"error": "unknown user"}, 404
-    if u["revoked"]:
+    except service.RevokedError:
         return {"error": "revoked"}, 403
-    # over-18 from DOB (calendar-correct; day counts drift on leap years)
-    adult = is_adult(u["dob"])
-    priv, _ = load_keys()
-    payload = {"v": 1, "iss": ISSUER_ID,
-               "uid_p": pseudonym(u["master_secret"], args["verifier_id"]),
-               "a": "over_18", "r": 1 if adult else 0,
-               "exp": int(time.time()) + EXPIRY_SEC}
-    # Live-challenge binding: if holder presents verifier nonce at issue time,
-    # issuer embeds + signs it. Static QRs (no n) fail a fresh challenge -> anti-replay.
-    if args.get("nonce"):
-        payload["n"] = args["nonce"]
-    # Contract check (explicit 500, never bare assert): the unsigned body must be
-    # exactly the required fields minus "s", with optional "n".
-    want = set(CRED_REQUIRED_FIELDS) - {"s"}
-    if args.get("nonce"):
-        want |= {"n"}
-    if set(unsigned_body(payload)) != want:
-        log.error(json.dumps({"event": "contract_drift",
-                              "keys": sorted(payload)}))
+    except service.ContractDriftError as e:
+        log.error(json.dumps({"event": "contract_drift", "detail": str(e)}))
         return {"error": "issuer contract drift"}, 500
-    payload["s"] = sign_cred(unsigned_body(payload), priv)
     log.info(json.dumps({"event": "issue", "uid_p": payload["uid_p"],
                          "r": payload["r"]}))
     return jsonify(payload)
 
 
 @app.get("/otp")
-@limiter.limit("30/minute")
+@limiter.limit(config.LIMIT_ISSUE)
 def otp():
-    """Holder fallback-code source (feature phones): current 6-digit code for a
-    user at a verifier. Open like /issue — enrollment identity proofing is an
-    explicit prototype boundary (see README limits)."""
+    """Holder fallback-code source (feature phones): current 6-digit code.
+    Open like /issue — enrollment identity proofing is a prototype boundary."""
     user_id = request.args.get("user_id", "")
     verifier_id = request.args.get("verifier_id", "SHOP-A")
     if not (1 <= len(user_id) <= 32 and len(verifier_id) <= 32):
         return {"error": "bad user_id/verifier_id"}, 400
-    c = db()
-    u = c.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
-    c.close()
-    if not u:
+    try:
+        code, step_sec = service.fetch_otp_code(
+            user=repo.get_user(DB, user_id), verifier_id=verifier_id,
+            now=time.time())
+    except service.UnknownUserError:
         return {"error": "unknown user"}, 404
-    return {"code": otp6(u["master_secret"], verifier_id), "verifier": verifier_id,
-            "step_sec": 30}
+    return {"code": code, "verifier": verifier_id, "step_sec": step_sec}
 
 
 @app.post("/revoke")
 def revoke():
+    """Revoke a user (operator only) and bump the revlist version."""
     denied = require_admin()
     if denied:
         return denied
@@ -260,63 +185,46 @@ def revoke():
         args = RevokeSchema().load(request.get_json(force=True))
     except ValidationError as e:
         return {"error": e.messages}, 400
-    priv, _ = load_keys()
-    c = db()
-    c.execute("UPDATE users SET revoked=1 WHERE id=?", (args["user_id"],))
-    v = c.execute("SELECT MAX(v) m FROM revlist").fetchone()["m"] + 1
-    c.execute("INSERT INTO revlist VALUES (?,?, '[]','')",
-              (v, int(time.time())))
-    c.commit()
-    c.close()
-    log.info(json.dumps({"event": "revoke", "v": v}))
-    return jsonify(current_revlist(priv))
+    repo.set_revoked(DB, args["user_id"])
+    version = repo.bump_revlist(DB)
+    log.info(json.dumps({"event": "revoke", "v": version}))
+    return jsonify(current_revlist(load_keys()[0]))
 
 
 @app.post("/rotate")
 def rotate():
-    """Issuer-compromise recovery: fast key rotation, bumps trustbundle version."""
+    """Issuer-compromise recovery: fast key rotation, bumps revlist version."""
     denied = require_admin()
     if denied:
         return denied
-    if os.environ.get("ISSUER_PRIV_HEX"):
-        # Refuse rather than lie: rotation would advertise a key that never signs.
-        return {"error": "key is env-managed; rotate ISSUER_PRIV_HEX instead"}, 409
-    priv_new, pub_new = gen_keypair()
-    os.makedirs(KEYDIR, exist_ok=True)
-    with open(os.path.join(KEYDIR, "issuer_priv.hex"), "w") as f:
-        f.write(priv_new)
-    with open(os.path.join(KEYDIR, "issuer_pub.hex"), "w") as f:
-        f.write(pub_new)
-    c = db()
-    v = c.execute("SELECT MAX(v) m FROM revlist").fetchone()["m"] + 1
-    c.execute("INSERT INTO revlist VALUES (?,?, '[]','')",
-              (v, int(time.time())))
-    c.commit()
-    c.close()
-    log.warning(json.dumps({"event": "key_rotation", "new_v": v}))
-    return {"iss": ISSUER_ID, "pubkey_hex": pub_new, "v": v,
+    try:
+        priv_new, pub_new = service.rotate_keys(KEYDIR)
+    except service.EnvManagedKeyError as e:
+        return {"error": str(e)}, 409
+    version = repo.bump_revlist(DB)
+    log.warning(json.dumps({"event": "key_rotation", "new_v": version}))
+    return {"iss": ISSUER_ID, "pubkey_hex": pub_new, "v": version,
             "note": "redistribute trustbundle to verifiers"}
 
 
 @app.get("/")
 def index():
-    c = db()
-    users = c.execute("SELECT id, dob, revoked FROM users").fetchall()
-    c.close()
+    """Operator dashboard (synthetic seed data — no real PII, no DOBs shown)."""
+    users = [{"id": u["id"], "revoked": bool(u["revoked"]),
+              "adult": service.is_adult(u["dob"])} for u in repo.list_users(DB)]
     priv, pub = load_keys()
-    rl = current_revlist(priv)
     return render_template("issuer.html", users=users, pub=pub,
-                           iss=ISSUER_ID, rev=rl)
+                           iss=ISSUER_ID, rev=current_revlist(priv))
 
 
-init_db()  # import-safe (CREATE TABLE IF NOT EXISTS): needed for gunicorn/Vercel
+init_db()  # import-safe (idempotent): needed for gunicorn/Vercel
 
 
 # Dual hosting: serve at root AND under /issuer (Vercel services subpath).
 # Assigned here (not after the __main__ guard) so `python -m issuer.app` matches deploys.
 from shared.wsgi import PrefixStrip as _PS  # noqa: E402
 app.wsgi_app = _PS(app.wsgi_app, ["/issuer"])
-if os.environ.get("BEHIND_PROXY") == "1":  # Render/Vercel terminate TLS at the edge
+if config.BEHIND_PROXY:  # Render/Vercel terminate TLS at the edge
     from werkzeug.middleware.proxy_fix import ProxyFix as _PF  # noqa: E402
     app.wsgi_app = _PF(app.wsgi_app, x_for=1, x_proto=1)
 

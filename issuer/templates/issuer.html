@@ -6,8 +6,8 @@
 <p>Pubkey: <code>{{ pub }}</code></p>
 <p>Revlist v{{ rev.v }} revoked: {{ rev.revoked }}</p>
 <h2>Synthetic users (seed data — no real PII; enrollment identity proofing is out of scope for this prototype)</h2>
-<table><tr><th>ID</th><th>DOB</th><th>Revoked</th><th>Issue</th></tr>
-{% for u in users %}<tr><td>{{ u.id }}</td><td>{{ u.dob }}</td><td>{{ u.revoked }}</td>
+<table><tr><th>ID</th><th>Eligible</th><th>Status</th><th>Issue</th></tr>
+{% for u in users %}<tr><td>{{ u.id }}</td><td>{{ "adult" if u.adult else "minor" }}</td><td>{{ "revoked" if u.revoked else "active" }}</td>
 <td><button onclick="issue('{{ u.id }}')">Issue for SHOP-A</button></td></tr>{% endfor %}</table>
 <pre id="out"></pre>
 <script>

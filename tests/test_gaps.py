@@ -79,7 +79,8 @@ def test_rotate_refused_for_env_key(tmp_path, monkeypatch):
 
 def test_issue_contract_drift_is_500_not_crash(tmp_path, monkeypatch):
     _idb(str(tmp_path))
-    monkeypatch.setattr(I, "unsigned_body", lambda p: {"wrong": 1})
+    # Logic moved to issuer.service in the Phase-1 layer split; patch it there.
+    monkeypatch.setattr("issuer.service.unsigned_body", lambda p: {"wrong": 1})
     ic = I.app.test_client()
     assert ic.post("/issue", json={"user_id": "U001"}).status_code == 500
 
@@ -94,7 +95,8 @@ def test_log_receipt_rolls_back(tmp_path, monkeypatch):
     _vdb(str(tmp_path))
     def boom(*a):
         raise RuntimeError("disk gone")
-    monkeypatch.setattr(V, "_chain_hash", boom)
+    # Chain hashing moved to verifier.service in the Phase-1 layer split.
+    monkeypatch.setattr("verifier.service.chain_entry", boom)
     with pytest.raises(RuntimeError):
         V.log_receipt("over_18", "YES", "n", "s")
     assert V.db().execute("SELECT COUNT(*) c FROM receipts").fetchone()["c"] == 0
