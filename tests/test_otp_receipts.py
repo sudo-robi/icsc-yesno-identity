@@ -13,11 +13,26 @@ from shared.crypto import otp6, receipt_hash
 def _setup(tmp, secret="22" * 16):
     V.DB = os.path.join(tmp, "v.db")
     V.TRUST = os.path.join(tmp, "t.json")
+    V.SECRETS_PATH = os.path.join(tmp, "secrets.json")
     V.init_db()
     with open(V.TRUST, "w") as f:
         json.dump({"iss": "T", "pubkey_hex": "00" * 32, "v": 1,
-                   "revoked_uids": [], "otp_secrets": {"u": secret}}, f)
+                   "revoked_uids": []}, f)
+    with open(V.SECRETS_PATH, "w") as f:
+        json.dump({"u": secret}, f)
     return V.app.test_client(), secret
+
+
+def test_embedded_trustbundle_secrets_ignored(tmp_path):
+    """Regression: secrets accidentally left inside the trustbundle must NOT work."""
+    vc, secret = _setup(str(tmp_path))
+    with open(V.TRUST, "w") as f:
+        json.dump({"iss": "T", "pubkey_hex": "00" * 32, "v": 1,
+                   "revoked_uids": [], "otp_secrets": {"u": secret}}, f)
+    os.remove(V.SECRETS_PATH)
+    import time
+    code = otp6(secret, V.VERIFIER_ID, int(time.time() // 30))
+    assert vc.post("/verify_code", json={"code": code}).get_json()["reason"] == "BAD_OTP"
 
 
 def test_otp_valid_then_reuse_replay(tmp_path):

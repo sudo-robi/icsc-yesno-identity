@@ -13,8 +13,9 @@ from flask_limiter.util import get_remote_address
 from marshmallow import Schema, fields, ValidationError
 
 from shared.crypto import (
-    EXPIRY_SEC, gen_keypair, pseudonym, sign_cred, canonical,
+    EXPIRY_SEC, gen_keypair, pseudonym, sign_cred,
 )
+from shared.schemas import CRED_REQUIRED_FIELDS, unsigned_body
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 log = logging.getLogger("issuer")
@@ -151,7 +152,11 @@ def issue():
     # issuer embeds + signs it. Static QRs (no n) fail a fresh challenge -> anti-replay.
     if args.get("nonce"):
         payload["n"] = args["nonce"]
-    payload["s"] = sign_cred(payload, priv)
+    # Contract check: the unsigned body must be exactly the required fields minus "s".
+    # This is what the verifier re-derives via shared.schemas.unsigned_body().
+    assert set(unsigned_body(payload)) == set(CRED_REQUIRED_FIELDS) - {"s"}, \
+        f"contract drift: {sorted(payload)}"
+    payload["s"] = sign_cred(unsigned_body(payload), priv)
     log.info(json.dumps({"event": "issue", "uid_p": payload["uid_p"],
                          "r": payload["r"]}))
     return jsonify(payload)

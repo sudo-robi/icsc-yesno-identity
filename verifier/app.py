@@ -16,6 +16,7 @@ from marshmallow import Schema, fields, ValidationError
 from shared.crypto import (
     CLOCK_SKEW_SEC, otp6, receipt_hash, sha256_hex, verify_sig,
 )
+from shared.schemas import CRED_MAX_BYTES, malformed, unsigned_body
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 log = logging.getLogger("verifier")
@@ -31,6 +32,10 @@ VERIFIER_ID = os.environ.get("VERIFIER_ID", "SHOP-A")
 app = Flask(__name__)
 limiter = Limiter(get_remote_address, app=app, default_limits=["200/hour"])
 _nonces: dict[str, float] = {}
+NONCE_TTL_SEC = 300
+
+SECRETS_PATH = os.environ.get("OTP_SECRETS_PATH",
+               "/tmp/otp_secrets.json" if _ON_VERCEL else os.path.join(BASE, "otp_secrets.json"))
 
 
 class VerifySchema(Schema):
@@ -77,34 +82,46 @@ def log_receipt(q, result, nonce, sig):
     return eh
 
 
+def _prune_nonces(now: float | None = None) -> None:
+    now = time.time() if now is None else now
+    for n, issued in list(_nonces.items()):
+        if now - issued > NONCE_TTL_SEC:
+            del _nonces[n]
+
+
+def _load_secrets() -> dict:
+    """Demo-only OTP shared secrets. Stored SEPARATE from the trustbundle:
+    the bundle is public material (pubkeys, versions); secrets never belong in it."""
+    if not os.path.exists(SECRETS_PATH):
+        return {}
+    with open(SECRETS_PATH) as f:
+        return json.load(f)
+
+
 def decide(cred: dict, nonce: str) -> tuple[str, str]:
-    """Order: expiry -> sig -> revocation -> nonce -> attribute. Returns (YES/NO, reason)."""
+    """Order: trust -> shape -> size -> expiry -> challenge -> sig ->
+    revocation -> attribute. Returns (YES/NO, reason)."""
     t = trust()
     if not t:
         return "NO", "NO_TRUSTBUNDLE"
-    for k in ("v", "iss", "uid_p", "a", "r", "exp", "s"):
-        if k not in cred:
-            return "NO", "MALFORMED"
-    if len(json.dumps(cred)) > 4096:
+    if malformed(cred):
+        return "NO", "MALFORMED"
+    if len(json.dumps(cred)) > CRED_MAX_BYTES:
         return "NO", "TOO_LARGE"
     if cred["exp"] + CLOCK_SKEW_SEC < time.time():
         return "NO", "EXPIRED"
-    body = {k: cred[k] for k in ("v", "iss", "uid_p", "a", "r", "exp", "n") if k in cred}
-    # live-challenge binding: holder must echo fresh nonce
+    # live-challenge binding: nonce must be one THIS verifier issued (and fresh),
+    # and the credential must echo it under issuer signature.
     if nonce:
+        _prune_nonces()
+        issued = _nonces.get(nonce)
+        if issued is None or time.time() - issued > NONCE_TTL_SEC:
+            return "NO", "UNKNOWN_CHALLENGE"
         if cred.get("n") != nonce:
             return "NO", "REPLAY"
-        body["n"] = nonce
-    else:
-        if cred.get("n"):
-            body["n"] = cred["n"]
-        else:
-            body.pop("n", None)
+    body = unsigned_body(cred)
     if not verify_sig(body, cred["s"], t["pubkey_hex"]):
-        # retry without n (static QR + separate nonce field)
-        b2 = {k: v for k, v in body.items() if k != "n"}
-        if not (nonce and verify_sig(b2, cred["s"], t["pubkey_hex"])):
-            return "NO", "BADSIG"
+        return "NO", "BADSIG"
     # revocation: cached list version
     rev = t.get("revoked_uids", [])
     # uid_p is a pseudonym so revocation maps via issuer-side list of uid_p per verifier;
@@ -124,6 +141,7 @@ def healthz():
 @app.get("/challenge")
 def challenge():
     from shared.crypto import gen_nonce
+    _prune_nonces()
     n = gen_nonce()
     _nonces[n] = time.time()
     return {"nonce": n, "verifier": VERIFIER_ID}
@@ -149,16 +167,15 @@ def verify():
 @app.post("/verify_code")
 @limiter.limit("60/minute")
 def verify_code():
-    """Feature-phone path: 6-digit single-use code. Issuer must pre-share secret
-    for demo via trustbundle 'otp_secrets': {uid_p: secret}. Codes expire per 30s step."""
+    """Feature-phone path: 6-digit single-use code. Demo OTP secrets live in the
+    SEPARATE secrets store (never in the trustbundle). Codes expire per 30s step."""
     data = request.get_json(force=True)
     code = str(data.get("code", ""))
-    t = trust() or {}
     # demo check: code must match one of the known secrets for current/prev step
     import time as _t
     step = int(_t.time() // 30)
     ok = False
-    for sec in (t.get("otp_secrets") or {}).values():
+    for sec in _load_secrets().values():
         if code in (otp6(sec, VERIFIER_ID, step), otp6(sec, VERIFIER_ID, step - 1)):
             ok = True
             break
@@ -197,11 +214,17 @@ def receipts_csv():
 
 @app.post("/sync")
 def sync():
-    """One-time pairing (USB/QR): cache issuer pubkey + revocation pseudonyms."""
+    """One-time pairing (USB/QR): cache issuer pubkey + revocation pseudonyms.
+    Public material goes to the trustbundle; any bundled demo OTP secrets are
+    split out into the separate secrets store."""
     tb = request.get_json(force=True)
     assert "pubkey_hex" in tb and len(tb["pubkey_hex"]) == 64
+    secrets = tb.pop("otp_secrets", None)
     with open(TRUST, "w") as f:
         json.dump(tb, f, indent=2)
+    if secrets is not None:
+        with open(SECRETS_PATH, "w") as f:
+            json.dump(secrets, f, indent=2)
     return {"ok": True, "verifier": VERIFIER_ID}
 
 

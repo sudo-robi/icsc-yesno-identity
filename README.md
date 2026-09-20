@@ -4,12 +4,13 @@ Proving `over_18?` without revealing the record. Synthetic data only.
 
 ## Live
 - GitHub: https://github.com/sudo-robi/icsc-yesno-identity
-- Vercel: https://icsc-yesno-identity-rho.vercel.app
-  - Issuer: `/issuer/` · Verifier: `/verifier/` · Holder: `/holder/`
-  - Pair once: `GET /issuer/pubkey` → `POST /verifier/sync` (honest pairing ceremony)
-  - Live smoke: `.venv/bin/python scripts/live_demo.py` (YES + NO + BADSIG + REPLAY)
-- Vercel limits (honest): ephemeral `/tmp` per service — keys/receipts reset on
-  cold starts, re-pair takes 10s. Real deployments use Render (`deploy/render.blueprint.yaml`).
+- Deploy targets: Render blueprint `deploy/render.blueprint.yaml` (persistent services,
+  gunicorn) or Vercel services (`vercel.json`: `/issuer/*`, `/verifier/*`, `/holder/*`).
+  - Pair once: `GET <issuer>/pubkey` → `POST <verifier>/sync` (honest pairing ceremony)
+  - Smoke: `ISSUER_URL=... VERIFIER_URL=... .venv/bin/python scripts/live_demo.py`
+    (defaults to localhost:5001/5002; expects YES + NO + BADSIG + REPLAY)
+- Serverless limits (honest): ephemeral `/tmp` per service — keys/receipts reset on
+  cold starts, re-pair takes 10s. Persistent deployments use Render.
 
 ## Run offline (judges, no internet)
 ```bash
@@ -20,9 +21,8 @@ PORT=5001 python3 -m issuer.app & PORT=5002 python3 -m verifier.app &
 ```
 
 ## Free deploy (Render)
-Repo has `render.blueprint.yaml` (issuer + verifier web services, gunicorn).
-Render deploy: New → Blueprint → set blueprint file to `render.blueprint.yaml`.
-Live demo also on Vercel (single serverless function, ephemeral storage).
+Repo has `deploy/render.blueprint.yaml` (issuer + verifier web services, gunicorn).
+Render deploy: New → Blueprint → set blueprint file to `deploy/render.blueprint.yaml`.
 
 ## Demo (5 min)
 1. Issue U001 → paste into verifier → YES

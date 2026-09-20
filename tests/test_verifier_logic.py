@@ -14,13 +14,20 @@ PRIV, PUB = gen_keypair()
 
 def _trust(tmp, **kw):
     tb = {"iss": "NIMC-TEST-01", "pubkey_hex": PUB, "v": 1,
-          "revoked_uids": [], "otp_secrets": {}}
+          "revoked_uids": []}
     tb.update(kw)
     p = os.path.join(tmp, "trust.json")
     with open(p, "w") as f:
         json.dump(tb, f)
     V.TRUST = p
+    V._nonces.clear()
     return tb
+
+
+def _live(nonce):
+    """Register a verifier-issued challenge, as /challenge does."""
+    V._nonces[nonce] = time.time()
+    return nonce
 
 
 def _cred(priv=PRIV, **kw):
@@ -62,10 +69,28 @@ def test_revoked(tmp_path):
 def test_replay_and_live_nonce(tmp_path):
     _trust(str(tmp_path))
     static = _cred()
-    assert V.decide(static, "freshnonce123")[1] == "REPLAY"
+    assert V.decide(static, _live("freshnonce123"))[1] == "REPLAY"
     live = _cred(n="freshnonce123")
     assert V.decide(live, "freshnonce123") == ("YES", "OK")
-    assert V.decide(live, "othernonce")[1] == "REPLAY"
+    assert V.decide(live, _live("othernonce"))[1] == "REPLAY"
+
+
+def test_unknown_and_expired_challenge(tmp_path):
+    _trust(str(tmp_path))
+    assert V.decide(_cred(), "never-issued")[1] == "UNKNOWN_CHALLENGE"
+    V._nonces["stale"] = time.time() - V.NONCE_TTL_SEC - 10
+    assert V.decide(_cred(n="stale"), "stale")[1] == "UNKNOWN_CHALLENGE"
+    assert "stale" not in V._nonces  # pruned on read path
+
+
+def test_challenge_prunes_stale(tmp_path):
+    _trust(str(tmp_path))
+    V.DB = os.path.join(str(tmp_path), "v.db")
+    V.init_db()
+    V._nonces["old"] = time.time() - V.NONCE_TTL_SEC - 1
+    vc = V.app.test_client()
+    vc.get("/challenge")
+    assert "old" not in V._nonces
 
 
 def test_malformed_and_too_large(tmp_path):

@@ -5,6 +5,7 @@ keys/*.hex
 issuer/issuer.db
 verifier/receipts.db
 verifier/trustbundle.json
+verifier/otp_secrets.json
 .pytest_cache/
 .coverage
 .vercel

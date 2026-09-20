@@ -9,4 +9,4 @@ jobs:
         with: {python-version: '3.11'}
       - run: pip install -r requirements.txt
       - run: ruff check shared issuer verifier tests || true
-      - run: pytest -q --cov=shared --cov=issuer --cov=verifier --cov-report=term-missing --cov-fail-under=80
+      - run: pytest -q --cov=shared --cov=issuer --cov=verifier --cov-report=term-missing --cov-fail-under=90
