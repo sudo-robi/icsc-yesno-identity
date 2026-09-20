@@ -53,3 +53,21 @@ def test_endpoints(tmp_path):
         assert json.load(f) == {"b": "22" * 16}
     assert vc.get("/").status_code == 200
     assert vc.post("/verify", json={}).status_code == 400
+
+
+def test_sync_pairing_token(tmp_path, monkeypatch):
+    _s(str(tmp_path))
+    vc = V.app.test_client()
+    good = {"pubkey_hex": "00" * 32, "v": 7}
+    monkeypatch.setenv("PAIRING_TOKEN", "shop-secret")
+    r = vc.post("/sync", json=good)
+    assert r.status_code == 403
+    assert r.get_json()["reason"] == "BAD_PAIRING_TOKEN"
+    r = vc.post("/sync", json={**good, "pairing_token": "shop-secret"})
+    assert r.get_json()["ok"] is True
+    with open(V.TRUST) as f:
+        assert "pairing_token" not in json.load(f)  # token never persisted
+    r = vc.post("/sync", json=good, headers={"X-Pairing-Token": "shop-secret"})
+    assert r.get_json()["ok"] is True
+    monkeypatch.delenv("PAIRING_TOKEN")
+    assert vc.post("/sync", json=good).get_json()["ok"] is True  # open demo mode

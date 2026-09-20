@@ -216,10 +216,25 @@ def receipts_csv():
 def sync():
     """One-time pairing (USB/QR): cache issuer pubkey + revocation pseudonyms.
     Public material goes to the trustbundle; any bundled demo OTP secrets are
-    split out into the separate secrets store."""
-    tb = request.get_json(force=True)
+    split out into the separate secrets store.
+    Auth: if PAIRING_TOKEN env is set, the caller must present it (body field
+    `pairing_token` or `X-Pairing-Token` header), else 403 — otherwise anyone
+    reaching the verifier could swap its trusted keys. Unset = open pairing
+    for local demos (logged as a warning)."""
+    data = request.get_json(force=True)
+    required = os.environ.get("PAIRING_TOKEN")
+    if required:
+        presented = data.get("pairing_token") or request.headers.get("X-Pairing-Token")
+        if presented != required:
+            log.warning(json.dumps({"event": "sync_rejected"}))
+            return {"result": "NO", "reason": "BAD_PAIRING_TOKEN"}, 403
+    else:
+        log.warning(json.dumps({"event": "sync_open_mode",
+                                "note": "set PAIRING_TOKEN to lock pairing"}))
+    tb = dict(data)
     assert "pubkey_hex" in tb and len(tb["pubkey_hex"]) == 64
     secrets = tb.pop("otp_secrets", None)
+    tb.pop("pairing_token", None)
     with open(TRUST, "w") as f:
         json.dump(tb, f, indent=2)
     if secrets is not None:
