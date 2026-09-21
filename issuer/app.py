@@ -266,7 +266,7 @@ def events_sse():
                 except Exception:
                     # Send heartbeat to keep connection alive
                     if time.time() - last_heartbeat >= heartbeat_sec:
-                        yield f": heartbeat\n\n"
+                        yield ": heartbeat\n\n"
                         last_heartbeat = time.time()
         except GeneratorExit:
             bus.unsubscribe(q)
