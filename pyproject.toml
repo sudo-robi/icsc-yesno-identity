@@ -31,3 +31,8 @@ coverage = {source = ["shared", "issuer", "verifier"]}
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["shared*", "issuer*", "verifier*"]
+exclude = ["static*", "holder*", "vercel*", "deploy*", "tests*"]
